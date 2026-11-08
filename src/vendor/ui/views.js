@@ -15,6 +15,7 @@
 
 import { parseModel } from '../model/detect3d.js';
 import { buildScene, createModelView } from '../model/renderer.js';
+import { PreviewUnavailable } from '../../ui/preview-unavailable.js';
 import {
   bindPreviewCss,
   extraBodies,
@@ -26,7 +27,6 @@ import {
 import {
   buildTree,
   decodeTextBytes,
-  detect as detectArchive,
   formatBytes,
   listArchive,
   readEntry,
@@ -1118,7 +1118,6 @@ export function ModelPreviewBody(props) {
 
   const [phase, setPhase] = react.useState('parsing');
   const [model, setModel] = react.useState(null);
-  const [error, setError] = react.useState('');
   const [notice, setNotice] = react.useState('');
   const [wireframe, setWireframe] = react.useState(false);
 
@@ -1139,12 +1138,10 @@ export function ModelPreviewBody(props) {
     if (!data) {
       setModel(null);
       setPhase('error');
-      setError(tr(t, 'model.noData', '没有收到模型文件内容 / No model data'));
       return undefined;
     }
     let cancelled = false;
     setPhase('parsing');
-    setError('');
     setNotice('');
     const timer = setTimeout(() => {
       if (cancelled) return;
@@ -1158,16 +1155,14 @@ export function ModelPreviewBody(props) {
         if (parsed && parsed.error) {
           setModel(null);
           setPhase('error');
-          setError(String(parsed.error));
           return;
         }
         const normalized = normalizeModelResult(parsed);
         setModel(normalized);
         setPhase('ready');
-      } catch (err) {
+      } catch {
         setModel(null);
         setPhase('error');
-        setError(messageOf(err));
       }
     }, 0);
     return () => {
@@ -1186,9 +1181,8 @@ export function ModelPreviewBody(props) {
         viewRef.current.setModel(model);
         viewRef.current.setWireframe(wireframeRef.current);
         viewRef.current.resetView();
-      } catch (err) {
+      } catch {
         setPhase('error');
-        setError(messageOf(err));
       }
       return undefined;
     }
@@ -1206,9 +1200,8 @@ export function ModelPreviewBody(props) {
       viewRef.current = view;
       view.setWireframe(wireframeRef.current);
       view.resetView();
-    } catch (err) {
+    } catch {
       setPhase('error');
-      setError(messageOf(err));
     }
     return undefined;
   }, [model, phase]);
@@ -1269,14 +1262,7 @@ export function ModelPreviewBody(props) {
   }
   if (notice) notices.push(notice);
 
-  if (!data) {
-    return h('div', { className: 'dshpx-root' },
-      h(StatePanel, {
-        tone: 'error',
-        title: tr(t, 'model.noData', '没有收到模型文件内容'),
-        detail: fileName,
-      }));
-  }
+  if (!data || phase === 'error') return h(PreviewUnavailable);
 
   let overlay = null;
   if (phase === 'parsing') {
@@ -1284,12 +1270,6 @@ export function ModelPreviewBody(props) {
       tone: 'loading',
       title: tr(t, 'model.parsing', '正在解析 3D 模型…'),
       detail: fileName + ' · ' + bytesText(data.byteLength),
-    });
-  } else if (phase === 'error') {
-    overlay = h(StatePanel, {
-      tone: 'error',
-      title: tr(t, 'model.failed', '无法解析 3D 模型'),
-      detail: fileName + '\n' + error,
     });
   }
 
@@ -1372,25 +1352,22 @@ export function MediaPreviewBody(props) {
   const mime = mediaMimeOf(ext, kind);
 
   const [url, setUrl] = react.useState(null);
-  const [error, setError] = react.useState(null);
+  const [failed, setFailed] = react.useState(false);
 
   react.useEffect(() => {
     setUrl(null);
-    setError(null);
+    setFailed(false);
     if (!data) return undefined;
     if (typeof Blob === 'undefined' || typeof URL === 'undefined' || typeof URL.createObjectURL !== 'function') {
-      setError({
-        kind: 'unsupported',
-        message: tr(t, 'media.unsupported', '浏览器不支持该编码'),
-      });
+      setFailed(true);
       return undefined;
     }
     let objectUrl = null;
     try {
       objectUrl = URL.createObjectURL(new Blob([data], { type: mime }));
       setUrl(objectUrl);
-    } catch (err) {
-      setError({ kind: 'runtime', message: messageOf(err) });
+    } catch {
+      setFailed(true);
     }
     return () => {
       if (objectUrl) {
@@ -1412,7 +1389,7 @@ export function MediaPreviewBody(props) {
       }
     }
     setUrl(null);
-    setError({ kind: 'unsupported', message: tr(t, 'media.unsupported', '浏览器不支持该编码') });
+    setFailed(true);
   };
 
   const toolbar = h('div', { className: 'dshpx-toolbar' },
@@ -1422,26 +1399,10 @@ export function MediaPreviewBody(props) {
       h(Badge, null, mime),
       h(Stat, { value: fileName, title: fileName })));
 
-  if (!data) {
-    return h('div', { className: 'dshpx-root' },
-      toolbar,
-      h(StatePanel, { tone: 'error', title: tr(t, 'media.noData', '没有收到媒体文件内容'), detail: fileName }));
-  }
+  if (!data || failed) return h(PreviewUnavailable);
 
   let content;
-  if (error) {
-    content = h(StatePanel, {
-      tone: 'error',
-      title: error.kind === 'unsupported' ? tr(t, 'media.unsupported', '浏览器不支持该编码') : tr(t, 'media.error', '媒体加载失败'),
-      detail: [
-        fileName,
-        'MIME: ' + mime,
-        tr(t, 'common.size', '大小') + ': ' + bytesText(data.byteLength),
-        error.message || '',
-        tr(t, 'media.unsupportedHint', '浏览器无法解码此音频 / 视频编码。'),
-      ].filter(Boolean).join('\n'),
-    });
-  } else if (!url) {
+  if (!url) {
     content = h(StatePanel, { tone: 'loading', title: tr(t, 'common.loading', '加载中…'), detail: fileName });
   } else {
     content = h('div', { className: 'dshpx-media-stage' },
@@ -1502,7 +1463,6 @@ export function FontPreviewBody(props) {
 
   const [phase, setPhase] = react.useState('loading');
   const [family, setFamily] = react.useState('');
-  const [error, setError] = react.useState('');
   const [, attachScroll] = useScrollport(props);
 
   const info = react.useMemo(() => fontFormatOf(data), [data]);
@@ -1511,7 +1471,6 @@ export function FontPreviewBody(props) {
     let cancelled = false;
     let face = null;
     setFamily('');
-    setError('');
     if (!data) {
       setPhase('nodata');
       return undefined;
@@ -1519,33 +1478,29 @@ export function FontPreviewBody(props) {
     setPhase('loading');
     if (typeof document === 'undefined' || typeof FontFace === 'undefined' || !document.fonts) {
       setPhase('error');
-      setError(tr(t, 'font.unsupported', '当前环境不支持 FontFace API'));
       return undefined;
     }
     fontInstanceSeq += 1;
     const nextFamily = 'DshPreviewFont' + fontInstanceSeq + '_' + Math.random().toString(36).slice(2, 8);
     try {
       face = new FontFace(nextFamily, exactArrayBuffer(data));
-    } catch (err) {
+    } catch {
       setPhase('error');
-      setError(messageOf(err));
       return undefined;
     }
     face.load().then((loaded) => {
       if (cancelled) return;
       try {
         document.fonts.add(loaded);
-      } catch (err) {
+      } catch {
         setPhase('error');
-        setError(messageOf(err));
         return;
       }
       setFamily(nextFamily);
       setPhase('ready');
-    }).catch((err) => {
+    }).catch(() => {
       if (!cancelled) {
         setPhase('error');
-        setError(messageOf(err));
       }
     });
     return () => {
@@ -1567,15 +1522,7 @@ export function FontPreviewBody(props) {
       h(Badge, null, data ? bytesText(data.byteLength) : '—'),
       h(Stat, { value: fileName, title: fileName })));
 
-  if (!data) {
-    return h('div', { className: 'dshpx-root' },
-      toolbar,
-      h(StatePanel, {
-        tone: 'error',
-        title: tr(t, 'common.noData', '没有收到可预览的文件字节（content 不是 bytes 模式）'),
-        detail: fileName,
-      }));
-  }
+  if (!data || phase === 'error' || phase === 'nodata') return h(PreviewUnavailable);
 
   if (phase === 'loading') {
     return h('div', { className: 'dshpx-root', 'data-dshpx-body': 'font' },
@@ -1584,17 +1531,6 @@ export function FontPreviewBody(props) {
         tone: 'loading',
         title: tr(t, 'font.loading', '正在加载字体…'),
         detail: fileName + ' · ' + bytesText(data.byteLength),
-      }));
-  }
-
-  if (phase === 'error' || phase === 'nodata') {
-    return h('div', { className: 'dshpx-root', 'data-dshpx-body': 'font' },
-      toolbar,
-      h(StatePanel, {
-        tone: 'error',
-        title: tr(t, 'font.failed', '字体加载失败'),
-        detail: [fileName, '格式 / format: ' + (info.format === 'unknown' ? (info.label || '?') : info.format), error,
-          tr(t, 'font.hint', '字体文件可能已损坏，或浏览器不支持该字体格式。')].filter(Boolean).join('\n'),
       }));
   }
 
@@ -1751,19 +1687,12 @@ export function ArchivePreviewBody(props) {
         const result = await listArchive(data, { filename: fileName });
         if (cancelled) return;
         if (!result || result.supported === false) {
-          setListState({ status: 'unsupported', result: result || null });
+          setListState({ status: 'unsupported' });
         } else {
           setListState({ status: 'ready', result });
         }
-      } catch (err) {
-        if (cancelled) return;
-        let detected = null;
-        try {
-          detected = detectArchive(data, fileName);
-        } catch (detectErr) {
-          detected = null;
-        }
-        setListState({ status: 'error', error: messageOf(err), detected });
+      } catch {
+        if (!cancelled) setListState({ status: 'error' });
       }
     })();
     return () => {
@@ -1928,13 +1857,8 @@ export function ArchivePreviewBody(props) {
   }, [selected]);
 
   // ---- 面板 ----
-  if (!data) {
-    return h('div', { className: 'dshpx-root' },
-      h(StatePanel, {
-        tone: 'error',
-        title: tr(t, 'common.noData', '没有收到可预览的文件字节'),
-        detail: fileName,
-      }));
+  if (!data || listState.status === 'error' || listState.status === 'unsupported') {
+    return h(PreviewUnavailable);
   }
 
   if (listState.status === 'loading') {
@@ -1943,29 +1867,6 @@ export function ArchivePreviewBody(props) {
         tone: 'loading',
         title: tr(t, 'archive.loading', '正在读取压缩包…'),
         detail: fileName + ' · ' + bytesText(data.byteLength),
-      }));
-  }
-
-  if (listState.status === 'error') {
-    const detected = listState.detected;
-    return h('div', { className: 'dshpx-root', 'data-dshpx-body': 'archive' },
-      h(StatePanel, {
-        tone: 'error',
-        title: tr(t, 'archive.failed', '无法解析压缩包'),
-        detail: [fileName, listState.error, detected && detected.format ? tr(t, 'common.format', '格式') + ': ' + detected.format : '',
-          detected && detected.hint ? detected.hint : ''].filter(Boolean).join('\n'),
-      }));
-  }
-
-  if (listState.status === 'unsupported') {
-    const result = listState.result;
-    const hint = (result && (result.hint || (result.notes && result.notes[0]))) || '';
-    return h('div', { className: 'dshpx-root', 'data-dshpx-body': 'archive' },
-      h(StatePanel, {
-        tone: 'warning',
-        title: tr(t, 'archive.unsupported', '暂不支持该压缩格式'),
-        detail: [fileName, result && result.format ? tr(t, 'common.format', '格式') + ': ' + result.format : '', hint]
-          .filter(Boolean).join('\n'),
       }));
   }
 
@@ -2317,8 +2218,8 @@ export function SubtitlePreviewBody(props) {
           truncated: data.byteLength > limit,
           warnings: parsed.warnings || [],
         });
-      } catch (err) {
-        if (!cancelled) setState({ status: 'error', error: messageOf(err) });
+      } catch {
+        if (!cancelled) setState({ status: 'error' });
       }
     })();
     return () => {
@@ -2357,11 +2258,7 @@ export function SubtitlePreviewBody(props) {
         onClick: () => setViewMode('raw'),
       }, tr(t, 'subtitle.raw', '原始文本'))));
 
-  if (!data || state.status === 'empty') {
-    return h('div', { className: 'dshpx-root', 'data-dshpx-body': 'subtitle' },
-      toolbar,
-      h(StatePanel, { tone: 'error', title: tr(t, 'subtitle.noData', '没有收到字幕文件内容'), detail: fileName }));
-  }
+  if (!data || state.status === 'empty' || state.status === 'error') return h(PreviewUnavailable);
 
   if (state.status === 'loading') {
     return h('div', { className: 'dshpx-root', 'data-dshpx-body': 'subtitle' },
@@ -2370,16 +2267,6 @@ export function SubtitlePreviewBody(props) {
         tone: 'loading',
         title: tr(t, 'subtitle.loading', '正在解析字幕…'),
         detail: fileName + ' · ' + bytesText(data.byteLength),
-      }));
-  }
-
-  if (state.status === 'error') {
-    return h('div', { className: 'dshpx-root', 'data-dshpx-body': 'subtitle' },
-      toolbar,
-      h(StatePanel, {
-        tone: 'error',
-        title: tr(t, 'subtitle.failed', '字幕解析失败'),
-        detail: fileName + '\n' + state.error,
       }));
   }
 

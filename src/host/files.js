@@ -127,7 +127,7 @@ function createDiskAccess() {
     const target = await resolve(input, signal);
     const info = await stat(target);
     if (!info.isFile()) throw new BrowseError('只能预览普通文件');
-    if (limit === maxBytes && info.size > limit) throw new BrowseError('文件超过 32 MB 预览上限', 413);
+    if (limit === maxBytes && info.size > limit) throw new BrowseError('文件超过 32 MB 读取上限', 413);
     const handle = await open(target, 'r');
     try {
       const opened = await handle.stat();
@@ -141,7 +141,7 @@ function createDiskAccess() {
         length += bytesRead;
       }
       const eof = length <= limit && length <= opened.size;
-      if (limit === maxBytes && (!eof || opened.size > limit)) throw new BrowseError('文件超过 32 MB 预览上限', 413);
+      if (limit === maxBytes && (!eof || opened.size > limit)) throw new BrowseError('文件超过 32 MB 读取上限', 413);
       return { data: buffer.subarray(0, Math.min(length, limit)), eof };
     } finally {
       await handle.close();
@@ -153,7 +153,7 @@ function createDiskAccess() {
     const target = await resolve(absolute, signal);
     const info = await stat(target);
     if (info.isDirectory()) return { path: absolute, type: 'directory' };
-    if (info.isFile()) return { path: absolute, type: 'file', name: path.basename(absolute) };
+    if (info.isFile()) return { path: absolute, nativePath: target, type: 'file', name: path.basename(absolute) };
     throw new BrowseError('该路径不指向普通文件或文件夹');
   }
 

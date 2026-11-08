@@ -8,7 +8,7 @@ const h = react.createElement;
 function apply(ctx) {
   if (location.protocol !== 'dsh-app:' || location.hostname !== 'app') return;
   if (!navigator.platform.startsWith('Win')) return;
-  ctx.inject(['sidebarRightTabs', 'sidebarRight'], (scope) => {
+  ctx.inject(['sidebarRightTabs', 'sidebarRight', 'remote', 'remote.session'], (scope) => {
     const sidebar = scope.sidebarRight;
     const host = document.createElement('div');
     host.className = 'dwe-host';
@@ -17,6 +17,10 @@ function apply(ctx) {
     let carryToNextSession = false;
     let refreshList;
     const getTarget = () => currentTarget;
+    const openLocal = async path => {
+      const result = await scope.remote.session.openWorkspacePath({ path });
+      if (!result.ok) throw result.error;
+    };
     const bindRefresh = refresh => {
       refreshList = refresh;
       return () => { refreshList = undefined; };
@@ -81,8 +85,7 @@ function apply(ctx) {
         return () => { active = false; };
       }, [sessionId]);
       return reactDom.createPortal(h(Explorer, {
-        sessionId, cwd, getTarget, bindRefresh,
-
+        sessionId, cwd, getTarget, bindRefresh, openLocal,
       }), host);
     }
 

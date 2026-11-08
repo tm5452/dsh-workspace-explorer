@@ -1,6 +1,6 @@
-{
+﻿{
   "name": "dsh-workspace-explorer",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Read-only Windows disk browsing and a persistent preview in DeepSeek Harness Desktop.",
   "type": "module",
   "main": "./lib/index.js",
@@ -16,13 +16,12 @@
     "client": {
       "platform": "web",
       "inject": [
+        "@deepseek-ai/dsh-api-remotes",
+        "@deepseek-ai/dsh-api-session-controller",
         "@deepseek-ai/dsh-client-ui-sidebar-right",
         "@deepseek-ai/dsh-client-ui-session"
       ]
     }
-  },
-  "scripts": {
-    "build": "node scripts/build-client.mjs"
   },
   "files": [
     "lib",
@@ -41,5 +40,8 @@
     "type": "git",
     "url": "git+https://github.com/tm5452/dsh-workspace-explorer.git"
   },
-  "homepage": "https://github.com/tm5452/dsh-workspace-explorer#readme"
+  "homepage": "https://github.com/tm5452/dsh-workspace-explorer#readme",
+  "scripts": {
+    "build": "node scripts/build-client.mjs"
+  }
 }

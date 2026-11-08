@@ -1,6 +1,7 @@
 import { joinPath, move, parentOf, resourceAddress, visit, windowsPath } from './navigation.js';
 import { Preview, PreviewBoundary } from './preview.js';
 import { disks } from './workspace.js';
+import { useComposerDrop } from './composer-drop.js';
 
 const { createElement: h, useEffect, useLayoutEffect, useRef, useState, useCallback } = react;
 const collator = new Intl.Collator('zh-CN', { numeric: true, sensitivity: 'base' });
@@ -17,18 +18,21 @@ const icons = {
   close: 'm6 6 12 12M18 6 6 18',
   external: 'M14 4h6v6m0-6-9 9m7-1v7H5V6h7',
   chevron: 'm9 6 6 6-6 6',
+  list: 'M9 6h11M9 12h11M9 18h11M4 6h1M4 12h1M4 18h1',
+  grid: 'M4 4h6v6H4zm10 0h6v6h-6zM4 14h6v6H4zm10 0h6v6h-6z',
+  preview: 'M3 4h18v16H3zM3 13h18',
 };
 
-function icon(name) {
+function icon(name, size = 16) {
   return h('svg', {
-    width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor',
+    width: size, height: size, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor',
     strokeWidth: 1.6, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true,
   }, h('path', { d: icons[name] }));
 }
 
-function fileIcon(name, kind) {
-  if (kind === 'drive') return icon('drive');
-  return h(primitives.FileTypeIcon, kind === 'directory' ? { kind: 'folder', size: 16 } : { path: name, size: 16 });
+function fileIcon(name, kind, size = 16) {
+  if (kind === 'drive') return icon('drive', size);
+  return h(primitives.FileTypeIcon, kind === 'directory' ? { kind: 'folder', size } : { path: name, size });
 }
 
 function tool(name, label, onClick, disabled = false, pressed) {
@@ -84,22 +88,72 @@ function readFollowSetting() {
   try { return localStorage.getItem(followKey) !== 'false'; } catch { return true; }
 }
 
-export function Explorer({ cwd, sessionId, bindRefresh, getTarget }) {
+function readViewMode(key) {
+  try { return localStorage.getItem(key) === 'grid' ? 'grid' : 'list'; } catch { return 'list'; }
+}
+
+const splitMin = 0.16;
+const splitMax = 0.86;
+const clampSplit = ratio => Math.min(splitMax, Math.max(splitMin, ratio));
+
+function PreviewDivider({ root, ratio, setRatio }) {
+  const grabOffset = useRef(0);
+  return h('div', {
+    className: 'dwe-divider', role: 'separator', tabIndex: 0,
+    'aria-label': '调整文件预览分栏高度', 'aria-orientation': 'horizontal',
+    'aria-valuemin': splitMin * 100, 'aria-valuemax': splitMax * 100,
+    'aria-valuenow': Math.round(ratio * 100),
+    onPointerDown: event => {
+      if (event.button !== 0) return;
+      event.preventDefault();
+      const divider = event.currentTarget;
+      grabOffset.current = event.clientY - divider.getBoundingClientRect().top;
+      divider.focus();
+      divider.setPointerCapture(event.pointerId);
+    },
+    onPointerMove: event => {
+      const divider = event.currentTarget;
+      if (!divider.hasPointerCapture(event.pointerId)) return;
+      const bounds = root.current.getBoundingClientRect();
+      const available = bounds.height - divider.offsetHeight;
+      if (available > 0) setRatio(clampSplit((event.clientY - bounds.top - grabOffset.current) / available));
+    },
+    onKeyDown: event => {
+      if (event.key === 'ArrowUp') setRatio(value => clampSplit(value - 0.05));
+      else if (event.key === 'ArrowDown') setRatio(value => clampSplit(value + 0.05));
+      else if (event.key === 'Home') setRatio(splitMin);
+      else if (event.key === 'End') setRatio(splitMax);
+      else return;
+      event.preventDefault();
+      event.stopPropagation();
+    },
+  });
+}
+
+export function Explorer({ cwd, sessionId, bindRefresh, getTarget, openLocal }) {
   const [follow, setFollow] = useState(readFollowSetting);
   const [history, setHistory] = useState(() => ({ paths: [follow ? windowsPath(cwd) : null], index: 0 }));
   const [revision, setRevision] = useState(0);
   const [listing, setListing] = useState(null);
   const [selection, setSelection] = useState(null);
   const [preview, setPreview] = useState(null);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [splitRatio, setSplitRatio] = useState(0.55);
   const [editor, setEditor] = useState(null);
   const [pathError, setPathError] = useState('');
+  const [actionError, setActionError] = useState('');
+  const startFileDrag = useComposerDrop(sessionId, setActionError);
   const [locating, setLocating] = useState(false);
+  const [viewModes, setViewModes] = useState(() => new Map());
   const scroll = useRef(null);
+  const layout = useRef(null);
   const input = useRef(null);
-  const previewSource = useRef(null);
   const pathRequest = useRef(null);
   const followedSession = useRef();
   const path = history.paths[history.index];
+  const viewKey = 'dsh-workspace-explorer.view:' + (path ?? 'home');
+  const savedMode = react.useMemo(() => readViewMode(viewKey), [viewKey]);
+  const grid = (viewModes.get(viewKey) ?? savedMode) === 'grid';
   const ready = listing?.path === path && listing.revision === revision ? listing : null;
   const refresh = useCallback(() => setRevision(value => value + 1), []);
 
@@ -115,6 +169,7 @@ export function Explorer({ cwd, sessionId, bindRefresh, getTarget }) {
     closeEditor();
     if (destination === path) return;
     setSelection(null);
+    setActionError('');
     setHistory(value => visit(value, destination));
   }, [closeEditor, path]);
 
@@ -155,24 +210,45 @@ export function Explorer({ cwd, sessionId, bindRefresh, getTarget }) {
     try { localStorage.setItem(followKey, String(next)); } catch { /* Keep the setting for this window. */ }
   }
 
+  function changeView(mode) {
+    setViewModes(previous => new Map(previous).set(viewKey, mode));
+    try { localStorage.setItem(viewKey, mode); } catch { /* Keep the choice for this window. */ }
+  }
+
   function historyStep(delta) {
     if (move(history, delta) === history) return;
     closeEditor();
     setSelection(null);
+    setActionError('');
     setHistory(value => move(value, delta));
   }
 
-  function openPreview(absolute, name, source) {
-    previewSource.current = source;
+  function openPreview(absolute, name) {
     setPreview(current => current?.absolute === absolute ? current : {
       name, absolute, address: resourceAddress(absolute),
     });
   }
 
-  function activate(entry, row) {
+  function select(entry) {
+    setSelection(entry.name);
+    setActionError('');
+    if (entry.type === 'file') openPreview(joinPath(path, entry.name), entry.name);
+  }
+
+  async function openWithWindows(path) {
+    try {
+      const file = await disks.locate(path);
+      if (file.type !== 'file') throw new Error('请选择普通文件');
+      await openLocal(file.nativePath);
+    } catch (error) {
+      setActionError('无法用 Windows 打开文件 · ' + (error?.message || String(error)));
+    }
+  }
+
+  function activate(entry) {
     const destination = entry.path ?? joinPath(path, entry.name);
     if (entry.type === 'directory' || entry.type === 'drive') navigate(destination);
-    else if (entry.type === 'file') openPreview(destination, entry.name, row);
+    else if (entry.type === 'file') void openWithWindows(destination);
   }
 
   async function submitPath(event) {
@@ -189,7 +265,7 @@ export function Explorer({ cwd, sessionId, bindRefresh, getTarget }) {
       if (target.type === 'directory') navigate(windowsPath(target.path));
       else {
         closeEditor();
-        openPreview(target.path, target.name, null);
+        openPreview(target.path, target.name);
       }
       scroll.current.focus();
     } catch (error) {
@@ -200,13 +276,6 @@ export function Explorer({ cwd, sessionId, bindRefresh, getTarget }) {
         setLocating(false);
       }
     }
-  }
-
-  function closePreview() {
-    const source = previewSource.current;
-    setPreview(null);
-    previewSource.current = null;
-    (source?.isConnected ? source : scroll.current)?.focus();
   }
 
   function openNative() {
@@ -231,11 +300,14 @@ export function Explorer({ cwd, sessionId, bindRefresh, getTarget }) {
     if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
     if (event.key === 'Enter') {
       event.preventDefault();
-      activate(entry, event.currentTarget);
+      activate(entry);
     }
   }
 
-  return h('div', { className: 'dwe', onKeyDown: keyboard },
+  return h('div', {
+    className: 'dwe', onKeyDown: keyboard, ref: layout, 'data-preview-open': previewOpen || undefined,
+    style: { '--dwe-upper': splitRatio + 'fr', '--dwe-lower': (1 - splitRatio) + 'fr' },
+  },
     h('div', { className: 'dwe-folder', 'aria-label': '本机文件列表' },
       h('div', { className: 'dwe-toolbar' },
         h('div', { className: 'dwe-nav' },
@@ -254,36 +326,45 @@ export function Explorer({ cwd, sessionId, bindRefresh, getTarget }) {
           : h(Breadcrumb, { path, navigate }),
         !editing && tool('edit', '编辑路径 (Ctrl+L)', () => setEditor(path ?? '')),
         tool('follow', '跟随会话工作区', toggleFollow, false, follow)),
-      pathError && h('p', { className: 'dwe-message dwe-error', role: 'alert' }, pathError),
+      (pathError || actionError) && h('p', { className: 'dwe-message dwe-error', role: 'alert' }, pathError || actionError),
       h('div', { className: 'dwe-list', ref: scroll, tabIndex: -1, 'aria-busy': !ready },
-        h('div', { className: 'dwe-columns dwe-head', 'aria-hidden': true },
+        !grid && h('div', { className: 'dwe-columns dwe-head', 'aria-hidden': true },
           h('span', null, '名称'), h('span', null, '类型'), h('span', null, '大小')),
         !ready ? h('p', { className: 'dwe-message', role: 'status' }, '正在读取…')
           : ready.error ? h('p', { className: 'dwe-message dwe-error', role: 'alert' }, ready.error)
           : ready.entries.length === 0 ? h('p', { className: 'dwe-message' }, path ? '此文件夹为空' : '没有可用的本机磁盘')
-          : h('ul', { className: 'dwe-entries' },
+          : h('ul', { className: grid ? 'dwe-entries dwe-grid' : 'dwe-entries' },
               ready.entries.map(entry => h('li', { key: entry.name },
                 h('button', {
-                  type: 'button', className: 'dwe-columns dwe-row', title: entry.name,
+                  type: 'button', className: grid ? 'dwe-row dwe-tile' : 'dwe-columns dwe-row', title: entry.name,
                   'aria-pressed': selection === entry.name,
                   disabled: entry.type === 'other',
-                  onClick: () => setSelection(entry.name),
-                  onDoubleClick: event => activate(entry, event.currentTarget),
+                  draggable: entry.type === 'file' && Boolean(sessionId),
+                  onDragStart: entry.type === 'file'
+                    ? event => startFileDrag(event, joinPath(path, entry.name), entry.name) : undefined,
+                  onClick: () => select(entry),
+                  onDoubleClick: () => activate(entry),
                   onKeyDown: event => rowKeyboard(event, entry),
                 },
-                h('span', { className: 'dwe-name' }, fileIcon(entry.name, entry.type), h('span', null, entry.name)),
-                h('span', { className: 'dwe-meta' }, entryType(entry)),
-                h('span', { className: 'dwe-meta' }, formatSize(entry.size))))))),
-      h('div', { className: 'dwe-status', role: 'status' },
-        ready?.entries ? ready.entries.length + ' 个项目' + (ready.truncated ? ' · 列表已截断' : '') : ' ')),
-    preview && h('section', { className: 'dwe-preview', 'aria-label': '文件预览' },
+                h('span', { className: 'dwe-name' }, fileIcon(entry.name, entry.type, grid ? 44 : 16), h('span', null, entry.name)),
+                !grid && h('span', { className: 'dwe-meta' }, entryType(entry)),
+                !grid && h('span', { className: 'dwe-meta' }, formatSize(entry.size))))))),
+      h('footer', { className: 'dwe-status-bar' },
+        h('span', { className: 'dwe-status', role: 'status' },
+          ready?.entries ? ready.entries.length + ' 个项目' + (ready.truncated ? ' · 列表已截断' : '') : ' '),
+        h('div', { className: 'dwe-nav', role: 'group', 'aria-label': '视图与预览' },
+          tool('list', '列表', () => changeView('list'), false, !grid),
+          tool('grid', '大图标', () => changeView('grid'), false, grid),
+          tool('preview', '预览窗格', () => setPreviewOpen(open => !open), false, previewOpen)))),
+    previewOpen && h(PreviewDivider, { root: layout, ratio: splitRatio, setRatio: setSplitRatio }),
+    previewOpen && h('section', { className: 'dwe-preview', 'aria-label': '文件预览' },
       h('header', { className: 'dwe-preview-bar' },
         h('span', { className: 'dwe-preview-label' }, '预览'),
-        h('span', { className: 'dwe-preview-name', title: preview.absolute }, fileIcon(preview.name, 'file'), h('span', null, preview.name)),
-        tool('external', '在原生预览中打开', openNative),
-        tool('close', '关闭预览', closePreview)),
+        preview && h('span', { className: 'dwe-preview-name', title: preview.absolute }, fileIcon(preview.name, 'file'), h('span', null, preview.name)),
+        preview && tool('external', '在 DSH 文档预览中打开', openNative)),
       h('div', { className: 'dwe-preview-body' },
-        h(PreviewBoundary, { key: preview.absolute }, h(Preview, { file: preview })))),
+        preview ? h(PreviewBoundary, { key: preview.absolute }, h(Preview, { file: preview }))
+          : h('p', { className: 'dwe-message' }, '单击一个文件进行预览。'))),
   );
 }
 

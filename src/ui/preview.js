@@ -1,5 +1,6 @@
 import { previewBodies, previewDefinitions } from '../vendor/ui/views.js';
 import { disks } from './workspace.js';
+import { PreviewUnavailable } from './preview-unavailable.js';
 
 const { createElement: h, useEffect, useState } = react;
 const images = {
@@ -8,21 +9,15 @@ const images = {
 };
 const nativeFormats = new Set(['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx']);
 
-function errorMessage(error) {
-  return error instanceof Error ? error.message : String(error);
-}
-
 export class PreviewBoundary extends react.Component {
-  state = { error: null };
+  state = { failed: false };
 
-  static getDerivedStateFromError(error) {
-    return { error };
+  static getDerivedStateFromError() {
+    return { failed: true };
   }
 
   render() {
-    return this.state.error
-      ? h('p', { className: 'dwe-message dwe-error', role: 'alert' }, '无法渲染预览 · ' + errorMessage(this.state.error))
-      : this.props.children;
+    return this.state.failed ? h(PreviewUnavailable) : this.props.children;
   }
 }
 
@@ -50,14 +45,14 @@ export function Preview({ file }) {
             setResult({ kind: 'image', url: objectUrl });
           }
         } else if (nativeFormats.has(extension)) {
-          setResult({ kind: 'native' });
+          setResult({ kind: 'unavailable' });
         } else {
           const { text, eof } = await disks.read(file.absolute, signal);
           if (signal.aborted) return;
           setResult({ kind: 'text', text, eof });
         }
-      } catch (error) {
-        if (!signal.aborted) setResult({ kind: 'error', message: errorMessage(error) });
+      } catch {
+        if (!signal.aborted) setResult({ kind: 'unavailable' });
       }
     }
     void load();
@@ -71,14 +66,15 @@ export function Preview({ file }) {
     case 'vendor':
       return h(result.Body, { content: { kind: 'bytes', data: result.data }, resourceAddress: file.address, wrap: true });
     case 'image':
-      return h('img', { className: 'dwe-image', src: result.url, alt: file.name });
+      return h('img', {
+        className: 'dwe-image', src: result.url, alt: file.name,
+        onError: () => setResult({ kind: 'unavailable' }),
+      });
     case 'text':
       return h('pre', { className: 'dwe-text' },
         result.text || '（空文件）', result.eof ? '' : '\n\n… 仅显示首页，可在原生预览中继续查看');
-    case 'native':
-      return h('p', { className: 'dwe-message' }, '使用右上角的「在原生预览中打开」查看此文档。');
-    case 'error':
-      return h('p', { className: 'dwe-message dwe-error', role: 'alert' }, '无法读取预览 · ' + result.message);
+    case 'unavailable':
+      return h(PreviewUnavailable);
     default:
       return h('p', { className: 'dwe-message', role: 'status' }, '正在读取文件…');
   }

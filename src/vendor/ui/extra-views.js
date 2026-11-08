@@ -8,6 +8,7 @@ import { parseVcd } from '../formats/vcd.js';
 import { parseKicad } from '../formats/kicad.js';
 import { parseDfu } from '../formats/dfu.js';
 import { decodeUtf8 } from '../formats/text.js';
+import { PreviewUnavailable } from '../../ui/preview-unavailable.js';
 
 const h = react.createElement;
 
@@ -258,25 +259,25 @@ function useExtraStyles() {
 }
 
 function useParsed(data, parse) {
-  const [state, setState] = react.useState({ phase: 'loading', doc: null, error: '' });
+  const [state, setState] = react.useState({ phase: 'loading', doc: null });
   react.useEffect(() => {
     if (!data) {
-      setState({ phase: 'error', doc: null, error: '' });
+      setState({ phase: 'error', doc: null });
       return undefined;
     }
     let live = true;
-    setState({ phase: 'loading', doc: null, error: '' });
+    setState({ phase: 'loading', doc: null });
     const timer = setTimeout(() => {
       if (!live) return;
       try {
         const doc = parse(data);
         if (!doc || doc.ok === false) {
-          setState({ phase: 'error', doc: null, error: (doc && doc.error) || '' });
+          setState({ phase: 'error', doc: null });
         } else {
-          setState({ phase: 'ready', doc, error: '' });
+          setState({ phase: 'ready', doc });
         }
-      } catch (err) {
-        setState({ phase: 'error', doc: null, error: err && err.message ? err.message : String(err) });
+      } catch {
+        setState({ phase: 'error', doc: null });
       }
     }, 0);
     return () => {
@@ -350,14 +351,7 @@ export function TomlPreviewBody(props) {
   const fileName = useFileName(props);
   const data = bytesOf(props.content);
   const state = useParsed(data, (bytes) => parseToml(decodeUtf8(bytes)));
-  if (!data || state.phase === 'error') {
-    return h(Frame, { kind: 'toml', toolbar: h(Badge, null, 'TOML') },
-      h(StatePanel, {
-        tone: 'error',
-        title: tr(t, 'extra.failed', '无法解析'),
-        detail: `${fileName}\n${state.error || tr(t, 'extra.empty', '文件是空的')}`,
-      }));
-  }
+  if (!data || state.phase === 'error') return h(PreviewUnavailable);
   if (state.phase !== 'ready') {
     return h(Frame, { kind: 'toml', toolbar: h(Badge, null, 'TOML') },
       h(StatePanel, { tone: 'loading', title: tr(t, 'extra.loading', '正在解析…'), detail: fileName }));
@@ -398,10 +392,7 @@ export function HexPreviewBody(props) {
   const fileName = useFileName(props);
   const data = bytesOf(props.content);
   const state = useParsed(data, parseIntelHex);
-  if (!data || state.phase === 'error') {
-    return h(Frame, { kind: 'ihex', toolbar: h(Badge, null, 'HEX') },
-      h(StatePanel, { tone: 'error', title: tr(t, 'extra.failed', '无法解析'), detail: `${fileName}\n${state.error || ''}` }));
-  }
+  if (!data || state.phase === 'error') return h(PreviewUnavailable);
   if (state.phase !== 'ready') {
     return h(Frame, { kind: 'ihex', toolbar: h(Badge, null, 'HEX') },
       h(StatePanel, { tone: 'loading', title: tr(t, 'extra.loading', '正在解析…'), detail: fileName }));
@@ -453,10 +444,7 @@ export function JcampPreviewBody(props) {
     }
     return () => { if (observer) observer.disconnect(); };
   }, [state.doc, state.phase]);
-  if (!data || state.phase === 'error') {
-    return h(Frame, { kind: 'jcamp', toolbar: h(Badge, null, 'JCAMP') },
-      h(StatePanel, { tone: 'error', title: tr(t, 'extra.failed', '无法解析'), detail: `${fileName}\n${state.error || ''}` }));
-  }
+  if (!data || state.phase === 'error') return h(PreviewUnavailable);
   if (state.phase !== 'ready') {
     return h(Frame, { kind: 'jcamp', toolbar: h(Badge, null, 'JCAMP') },
       h(StatePanel, { tone: 'loading', title: tr(t, 'extra.loading', '正在解析…'), detail: fileName }));
@@ -505,10 +493,7 @@ export function VcdPreviewBody(props) {
     }
     return () => { if (observer) observer.disconnect(); };
   }, [state.doc, state.phase]);
-  if (!data || state.phase === 'error') {
-    return h(Frame, { kind: 'vcd', toolbar: h(Badge, null, 'VCD') },
-      h(StatePanel, { tone: 'error', title: tr(t, 'extra.failed', '无法解析'), detail: `${fileName}\n${state.error || ''}` }));
-  }
+  if (!data || state.phase === 'error') return h(PreviewUnavailable);
   if (state.phase !== 'ready') {
     return h(Frame, { kind: 'vcd', toolbar: h(Badge, null, 'VCD') },
       h(StatePanel, { tone: 'loading', title: tr(t, 'extra.loading', '正在解析…'), detail: fileName }));
@@ -549,10 +534,7 @@ export function KicadPreviewBody(props) {
     if (!canvas || typeof canvas.getContext !== 'function') return undefined;
     return mountKicad(canvas, state.doc);
   }, [state.doc, state.phase]);
-  if (!data || state.phase === 'error') {
-    return h(Frame, { kind: 'kicad', toolbar: h(Badge, null, 'KiCad') },
-      h(StatePanel, { tone: 'error', title: tr(t, 'extra.failed', '无法解析'), detail: `${fileName}\n${state.error || ''}` }));
-  }
+  if (!data || state.phase === 'error') return h(PreviewUnavailable);
   if (state.phase !== 'ready') {
     return h(Frame, { kind: 'kicad', toolbar: h(Badge, null, 'KiCad') },
       h(StatePanel, { tone: 'loading', title: tr(t, 'extra.loading', '正在解析…'), detail: fileName }));
@@ -584,10 +566,7 @@ export function DfuPreviewBody(props) {
   const fileName = useFileName(props);
   const data = bytesOf(props.content);
   const state = useParsed(data, parseDfu);
-  if (!data || state.phase === 'error') {
-    return h(Frame, { kind: 'dfu', toolbar: h(Badge, null, 'DFU') },
-      h(StatePanel, { tone: 'error', title: tr(t, 'extra.failed', '无法解析'), detail: `${fileName}\n${state.error || ''}` }));
-  }
+  if (!data || state.phase === 'error') return h(PreviewUnavailable);
   if (state.phase !== 'ready') {
     return h(Frame, { kind: 'dfu', toolbar: h(Badge, null, 'DFU') },
       h(StatePanel, { tone: 'loading', title: tr(t, 'extra.loading', '正在解析…'), detail: fileName }));
