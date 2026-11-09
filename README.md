@@ -30,9 +30,9 @@ https://github.com/tm5452/dsh-workspace-explorer/releases/download/v1.1.1/dsh-wo
 
 ## 界面实拍
 
-大图标视图、收藏夹和图片预览
+**大图标视图、收藏夹和视频预览**
 
-![大图标视图中的图片缩略图、收藏夹菜单和下方图片预览](docs/screenshots/grid-favorites.png)
+![大图标视图中的图片和视频缩略图、收藏夹菜单和下方视频预览](docs/screenshots/grid-favorites.png)
 
 **工作区搜索**
 
@@ -44,7 +44,7 @@ https://github.com/tm5452/dsh-workspace-explorer/releases/download/v1.1.1/dsh-wo
 
 在顶部标签栏打开和切换多个文件夹，可拖动标签调整顺序。每个标签页各自保留目录、导航历史和预览。
 
-![顶部标签栏同时打开了三个文件夹，当前选中 preview-test](docs/screenshots/stl-preview.png)
+![顶部同时打开三个文件夹标签，当前显示项目归档的文件列表和文本预览](docs/screenshots/stl-preview.png)
 
 ## 找到文件，保留浏览位置
 
