@@ -2,8 +2,6 @@
 
 适用于 DeepSeek Harness 的 Windows 桌面插件。通过右侧栏原有的「文件浏览」入口浏览本机磁盘，并在下方独立预览文件。
 
-![工作区资源管理器演示](docs/workspace-explorer.png)
-
 ## 安装
 
 1. 在 Harness 的「插件 → 添加插件」中粘贴下方正式安装包链接，也可粘贴已下载的本地 `.tgz` 路径。
@@ -16,6 +14,25 @@ https://github.com/tm5452/dsh-workspace-explorer/releases/download/v1.0.0/dsh-wo
 已安装早期预览包或 `1.1.0-beta.*` 本地测试包的用户，先在插件列表移除旧条目，再用上方链接安装。发布变更见 [版本记录](CHANGELOG.md)。
 
 从源码安装时，也可将插件目录以 `link:<绝对路径>` 添加。旧的同名插件记录可先从插件列表移除。
+
+## 界面实拍
+
+大图标视图、收藏夹和图片预览
+
+![大图标视图中的图片缩略图、收藏夹菜单和下方图片预览](docs/screenshots/grid-favorites.png)
+
+<details>
+<summary>工作区搜索和 STL 模型预览</summary>
+
+工作区模式会在结果中显示文件所在的子目录。
+
+![工作区模式按文件名搜索并显示结果所在的子目录](docs/screenshots/workspace-search.png)
+
+下方预览窗格可以旋转和缩放 STL 模型。
+
+![文件列表中选中 STL 文件，下方显示可交互的三维模型](docs/screenshots/stl-preview.png)
+
+</details>
 
 ## 浏览本机磁盘
 
