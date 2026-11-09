@@ -21,18 +21,17 @@ https://github.com/tm5452/dsh-workspace-explorer/releases/download/v1.0.0/dsh-wo
 
 ![大图标视图中的图片缩略图、收藏夹菜单和下方图片预览](docs/screenshots/grid-favorites.png)
 
-<details>
-<summary>工作区搜索和 STL 模型预览</summary>
+**工作区搜索**
 
 工作区模式会在结果中显示文件所在的子目录。
 
 ![工作区模式按文件名搜索并显示结果所在的子目录](docs/screenshots/workspace-search.png)
 
-下方预览窗格可以旋转和缩放 STL 模型。
+**多标签页浏览与管理**
 
-![文件列表中选中 STL 文件，下方显示可交互的三维模型](docs/screenshots/stl-preview.png)
+在顶部标签栏打开和切换多个文件夹，可拖动标签调整顺序。每个标签页各自保留目录、导航历史和预览。
 
-</details>
+![顶部标签栏同时打开了三个文件夹，当前选中 preview-test](docs/screenshots/stl-preview.png)
 
 ## 浏览本机磁盘
 
