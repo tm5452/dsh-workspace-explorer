@@ -1,5 +1,5 @@
 import { joinPath, move, parentOf, renamePath, resourceAddress, underPath, visit, windowsPath } from './navigation.js';
-import { Preview, PreviewBoundary } from './preview.js';
+import { formatSize, Preview, PreviewBoundary } from './preview.js';
 import { disks } from './workspace.js';
 import { useComposerDrop } from './composer-drop.js';
 import { Thumbnail } from './thumbnail.js';
@@ -78,14 +78,6 @@ function selectNames(current, name, entries, shift, ctrl) {
   const names = new Set(current.names);
   if (!names.delete(name)) names.add(name);
   return { names, anchor: name };
-}
-
-function formatSize(bytes) {
-  if (typeof bytes !== 'number') return '—';
-  if (bytes < 1024) return bytes + ' B';
-  if (bytes < 1024 ** 2) return (bytes / 1024).toFixed(1) + ' KB';
-  if (bytes < 1024 ** 3) return (bytes / 1024 ** 2).toFixed(1) + ' MB';
-  return (bytes / 1024 ** 3).toFixed(1) + ' GB';
 }
 
 function entryType(entry) {
@@ -244,7 +236,7 @@ export function Explorer({
       if (!current) return current;
       const absolute = renamePath(current.absolute, from, to);
       return absolute === current.absolute ? current
-        : { absolute, name: absolute.split('\\').at(-1), address: resourceAddress(absolute) };
+        : { ...current, absolute, name: absolute.split('\\').at(-1), address: resourceAddress(absolute) };
     });
   }, []);
   const closeMenu = useCallback((restore = false) => {
@@ -356,9 +348,9 @@ export function Explorer({
     changeHistory(value => move(value, delta));
   }
 
-  function openPreview(absolute, name) {
+  function openPreview(absolute, name, size) {
     setPreview(current => current?.absolute === absolute ? current : {
-      name, absolute, address: resourceAddress(absolute),
+      name, absolute, size, address: resourceAddress(absolute),
     });
   }
 
@@ -378,7 +370,7 @@ export function Explorer({
     setSelection(current => selectNames(current, entry.name, entries, shiftKey, ctrlKey));
     setActionError('');
     setActionNotice('');
-    if (!shiftKey && !ctrlKey && entry.type === 'file') openPreview(joinPath(path, entry.name), entry.name);
+    if (!shiftKey && !ctrlKey && entry.type === 'file') openPreview(joinPath(path, entry.name), entry.name, entry.size);
   }
 
   async function openWithWindows(path) {
@@ -511,7 +503,7 @@ export function Explorer({
       if (target.type === 'directory') navigate(windowsPath(target.path));
       else {
         closeEditor();
-        openPreview(target.path, target.name);
+        openPreview(target.path, target.name, target.size);
       }
       scroll.current.focus();
     } catch (error) {
@@ -586,6 +578,7 @@ export function Explorer({
           tool('home', workspaceMode ? '返回工作区根目录' : '返回此电脑', () => navigate(root), path === root),
           tool('workspace', '跳转至工作区', () => navigate(workspace), !workspace || path === workspace || workspaceMode)),
         h('div', { className: 'dwe-nav' },
+          h('span', { className: 'dwe-v-divider', 'aria-hidden': true }),
           tool('copy', '复制', () => runAction('copy', selectedEntries), !modifySelected),
           tool('cut', '剪切', () => runAction('cut', selectedEntries), !modifySelected),
           tool('paste', '粘贴', () => runAction('paste'), !path || working),
@@ -651,14 +644,15 @@ export function Explorer({
                 !grid && h('span', { className: 'dwe-meta' }, entryType(entry)),
                 !grid && h('span', { className: 'dwe-meta' }, formatSize(entry.size))))))),
       h('footer', { className: 'dwe-status-bar' },
+        h('div', { className: 'dwe-nav', role: 'group', 'aria-label': '文件视图' },
+          tool('list', '列表', () => changeView('list'), false, !grid),
+          tool('grid', '大图标', () => changeView('grid'), false, grid)),
+        h('span', { className: 'dwe-v-divider', 'aria-hidden': true }),
         h('span', { className: 'dwe-status', role: 'status', title: actionNotice },
           term ? found?.matches ? found.matches.length + ' 个结果' + (found.truncated ? ' · 请缩小关键词' : '') : ' '
             : actionNotice || (selectedEntries.length > 1 ? '已选择 ' + selectedEntries.length + ' 项'
               : ready?.entries ? ready.entries.length + ' 个项目' + (ready.truncated ? ' · 列表已截断' : '') : ' ')),
-        h('div', { className: 'dwe-nav', role: 'group', 'aria-label': '视图与预览' },
-          tool('list', '列表', () => changeView('list'), false, !grid),
-          tool('grid', '大图标', () => changeView('grid'), false, grid),
-          tool('preview', '预览窗格', () => setPreviewOpen(open => !open), false, previewOpen)))),
+        tool('preview', '预览窗格', () => setPreviewOpen(open => !open), false, previewOpen))),
     previewOpen && h(PreviewDivider, { root: layout, ratio: splitRatio, setRatio: setSplitRatio }),
     previewOpen && h('section', { className: 'dwe-preview', 'aria-label': '文件预览' },
       h('header', { className: 'dwe-preview-bar' },

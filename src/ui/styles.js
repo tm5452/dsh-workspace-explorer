@@ -12,6 +12,7 @@ export const explorerCss = `
 [data-dwe-tab-title] > span { min-inline-size: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dwe {
   --dwe-line: var(--dsw-alias-border-l3, color-mix(in srgb, currentColor 14%, transparent));
+  --dwe-rule-inset: 8px;
   --dwe-tint: color-mix(in srgb, currentColor 5%, transparent);
   --dwe-hover: color-mix(in srgb, currentColor 8%, transparent);
   --dwe-blue: #458bf5;
@@ -48,11 +49,17 @@ export const explorerCss = `
 .dwe-divider:focus-visible { outline: 2px solid var(--dwe-blue); outline-offset: -2px; }
 .dwe-toolbar, .dwe-preview-bar {
   display: flex; flex: none; align-items: center; gap: 6px;
-  padding: 3px 8px; min-width: 0; border-bottom: 1px solid var(--dwe-line);
+  padding: 3px 8px; min-width: 0; border-bottom: 1px solid transparent;
+}
+.dwe-toolbar, .dwe-head, .dwe-status-bar, .dwe-preview-bar {
+  background-image: linear-gradient(#F5F5F5, #F5F5F5);
+  background-repeat: no-repeat; background-origin: border-box;
+  background-size: calc(100% - 2 * var(--dwe-rule-inset)) 1px; background-position: center bottom;
 }
 .dwe-address-bar { display: flex; min-width: 0; flex: none; align-items: center; gap: 3px; padding: 5px 8px 0; }
 .dwe-toolbar { justify-content: space-between; gap: 4px; overflow-x: auto; scrollbar-width: none; }
 .dwe-nav { display: flex; align-items: center; gap: 2px; flex: none; }
+.dwe-v-divider { flex: 0 0 1px; height: 15px; margin-inline: 3px; background: var(--dwe-line); }
 .dwe button {
   font: inherit; color: inherit; border: 0; background: transparent; cursor: default;
 }
@@ -132,7 +139,7 @@ export const explorerCss = `
 .dwe-columns > span { padding-inline: 8px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dwe-head {
   position: sticky; top: 0; z-index: 1; padding: 5px 6px; font-size: 12px;
-  background: var(--dsw-alias-bg-base, Canvas); border-bottom: 1px solid var(--dwe-line);
+  background-color: var(--dsw-alias-bg-base, Canvas); border-bottom: 1px solid transparent;
 }
 .dwe-head span + span { border-inline-start: 1px solid var(--dwe-line); }
 .dwe-columns > span:last-child { text-align: end; }
@@ -171,13 +178,14 @@ export const explorerCss = `
 .dwe-meta, .dwe-status { opacity: .72; font-size: 12px; }
 .dwe-status { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dwe-status-bar {
-  flex: none; display: flex; align-items: center; justify-content: space-between; gap: 4px;
-  padding: 2px 6px 2px 12px; border-top: 1px solid var(--dwe-line);
+  flex: none; display: flex; align-items: center; gap: 4px;
+  padding: 2px 8px; border-top: 1px solid transparent; background-position: center top;
 }
+.dwe-status-bar > .dwe-tool { margin-inline-start: auto; }
 .dwe-preview {
   min-height: 0; display: flex; flex-direction: column;
 }
-.dwe-preview-bar { background: var(--dsw-alias-bg-base, Canvas); }
+.dwe-preview-bar { background-color: var(--dsw-alias-bg-base, Canvas); }
 .dwe-preview-label { flex: none; margin-inline: 4px; line-height: 28px; }
 .dwe-preview-name {
   min-width: 0; height: 28px; box-sizing: border-box; padding-inline: 7px 3px;
@@ -188,13 +196,17 @@ export const explorerCss = `
 .dwe-preview-body { flex: 1 1 auto; min-height: 0; overflow: auto; }
 .dwe-preview-cover {
   position: relative; display: grid; place-items: center; isolation: isolate;
-  height: 100%; min-height: 100px; overflow: hidden; background: var(--dwe-tint);
+  height: 100%; min-height: 112px; box-sizing: border-box; padding: 6px 12px;
+  overflow: hidden; background: var(--dwe-tint);
 }
+.dwe-preview-cover[data-video] { min-height: 128px; }
 .dwe-preview-cover[data-poster] { background: #15171a; }
 .dwe-preview-cover > img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; z-index: -1; }
+.dwe-cover-content { display: grid; grid-template-columns: minmax(0, 1fr); justify-items: center; gap: 8px; width: 100%; }
 .dwe-cover-action { display: flex; align-items: center; gap: 10px; }
 .dwe .dwe-cover-play {
-  display: grid; place-items: center; width: 52px; height: 52px; border-radius: 50%;
+  display: grid; place-items: center; width: 52px; height: 52px; padding: 0; box-sizing: border-box;
+  border-radius: 50%; corner-shape: round;
   background: #243953; color: #fff; box-shadow: 0 2px 8px #0003; cursor: pointer;
 }
 .dwe .dwe-cover-play:hover:not(:disabled) { background: #34577f; }
@@ -202,11 +214,17 @@ export const explorerCss = `
   padding: 7px 12px; border: 1px solid var(--dwe-line); border-radius: 6px;
   background: var(--dsw-alias-bg-base, Canvas); white-space: nowrap; cursor: pointer;
 }
-.dwe-cover-file {
-  position: absolute; inset-block-end: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  max-width: calc(100% - 24px); padding: 3px 8px; border-radius: 5px;
+.dwe-cover-details {
+  display: grid; grid-template-columns: minmax(0, 1fr); justify-items: center; gap: 3px;
+  max-width: 100%; min-width: 0; box-sizing: border-box; padding: 2px 8px; border-radius: 5px;
 }
-.dwe-preview-cover[data-poster] .dwe-cover-file { background: #15171abb; color: #fff; }
+.dwe-cover-file { max-width: 100%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dwe-cover-size { font-size: 12px; opacity: .72; }
+.dwe-preview-cover[data-video] .dwe-cover-details {
+  position: absolute; inset: 0 0 auto; display: flex; align-items: center; gap: 6px;
+  padding: 8px; border-radius: 0; background: #0009; color: #fff;
+}
+.dwe-preview-cover[data-video] .dwe-cover-size { flex: none; white-space: nowrap; }
 .dwe-pdf-scroll {
   height: 100%; overflow: auto; scrollbar-gutter: stable both-edges; background: var(--dwe-tint);
 }
@@ -274,6 +292,9 @@ export const explorerCss = `
 .dwe-dialog-actions button[type="submit"] { background: color-mix(in srgb, var(--dwe-blue) 23%, transparent); }
 .dwe-dialog-actions button[data-dwe-action="delete"] { background: #ad303d; color: #fff; }
 .dwe-dialog-actions button[data-dwe-action="delete"]:hover:not(:disabled) { background: #942634; }
+@container (max-width: 440px) {
+  .dwe-toolbar .dwe-tool:not(.dwe-scope-tool) { width: 26px; height: 26px; flex-basis: 26px; }
+}
 @container (max-width: 380px) {
   .dwe-columns { grid-template-columns: minmax(0, 1fr) 62px; }
   .dwe-columns > span:nth-child(2) { display: none; }

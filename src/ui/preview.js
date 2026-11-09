@@ -21,6 +21,14 @@ const coverActions = {
   [PREVIEW_IDS.dfu]: '查看固件',
 };
 
+export function formatSize(bytes) {
+  if (typeof bytes !== 'number') return '—';
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1024 ** 2) return (bytes / 1024).toFixed(1) + ' KB';
+  if (bytes < 1024 ** 3) return (bytes / 1024 ** 2).toFixed(1) + ' MB';
+  return (bytes / 1024 ** 3).toFixed(1) + ' GB';
+}
+
 export class PreviewBoundary extends react.Component {
   state = { failed: false };
 
@@ -35,6 +43,18 @@ export class PreviewBoundary extends react.Component {
 
 function PreviewCover({ file, root, videoType, label, archive, start }) {
   const [poster, setPoster] = useState(null);
+  const [resolvedSize, setResolvedSize] = useState(undefined);
+  const { absolute, name, size } = file;
+
+  useEffect(() => {
+    if (size !== undefined) return;
+    const controller = new AbortController();
+    void disks.locate(absolute, controller.signal, root).then(result => {
+      if (!controller.signal.aborted) setResolvedSize(result.size);
+    }, () => {});
+    return () => controller.abort();
+  }, [absolute, size, root]);
+
   useEffect(() => {
     if (!videoType) return;
     const controller = new AbortController();
@@ -50,16 +70,22 @@ function PreviewCover({ file, root, videoType, label, archive, start }) {
       h('rect', { x: 5, y: 3, width: 26, height: 30, rx: 5, fill: '#7462c4' }),
       h('path', { d: 'M18 5h3v4h-3v4h3v4h-3v4m-2 0h6v6h-6z', fill: 'none', stroke: '#fff', strokeWidth: 1.6, strokeLinejoin: 'round' }))
     : h(primitives.FileTypeIcon, { path: file.name, size: 36 });
-  return h('div', { className: 'dwe-preview-cover', 'data-poster': Boolean(poster) || undefined },
+  return h('div', {
+    className: 'dwe-preview-cover', 'data-video': Boolean(videoType) || undefined,
+    'data-poster': Boolean(poster) || undefined,
+  },
     poster && h('img', { src: poster, alt: '', draggable: false }),
-    h('div', { className: 'dwe-cover-action' },
-      !videoType && fileIcon,
-      h('button', {
-        type: 'button', className: videoType ? 'dwe-cover-play' : 'dwe-cover-open',
-        title: label, 'aria-label': label, onClick: start,
-      }, videoType ? h('svg', { width: 24, height: 24, viewBox: '0 0 24 24', 'aria-hidden': true },
-        h('path', { d: 'M9 5v14l11-7z', fill: 'currentColor' })) : label)),
-    h('div', { className: 'dwe-cover-file', title: file.name }, file.name));
+    h('div', { className: 'dwe-cover-content' },
+      h('div', { className: 'dwe-cover-action' },
+        !videoType && fileIcon,
+        h('button', {
+          type: 'button', className: videoType ? 'dwe-cover-play' : 'dwe-cover-open',
+          title: label, 'aria-label': label, onClick: start,
+        }, videoType ? h('svg', { width: 24, height: 24, viewBox: '0 0 24 24', 'aria-hidden': true },
+          h('path', { d: 'M9 5v14l11-7z', fill: 'currentColor' })) : label)),
+      h('div', { className: 'dwe-cover-details' },
+        h('div', { className: 'dwe-cover-file', title: name }, name),
+        h('div', { className: 'dwe-cover-size' }, formatSize(size ?? resolvedSize)))));
 }
 
 function ImagePreview({ url, name, onError }) {

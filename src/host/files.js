@@ -281,7 +281,7 @@ function createDiskAccess() {
     const target = await resolve(absolute, signal, workspace);
     const info = await stat(target);
     if (info.isDirectory()) return { path: absolute, nativePath: target, type: 'directory' };
-    if (info.isFile()) return { path: absolute, nativePath: target, type: 'file', name: path.basename(absolute) };
+    if (info.isFile()) return { path: absolute, nativePath: target, type: 'file', name: path.basename(absolute), size: info.size };
     throw new BrowseError('该路径不指向普通文件或文件夹');
   }
 
