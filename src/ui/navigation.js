@@ -39,3 +39,12 @@ export function resourceAddress(path, sessionId) {
   const encoded = path.split('\\').map(segment => encodeURIComponent(segment).replace(/%3A/gi, ':')).join('/');
   return 'dsh-resource://file/' + (sessionId ? 'session/' + encodeURIComponent(sessionId) : 'absolute') + '/' + encoded;
 }
+
+export function sessionFilePath(address, sessionId) {
+  const match = /^dsh-resource:\/\/file\/session\/([^/?#]+)\/([^?#]+)(?:[?#].*)?$/.exec(address);
+  if (!match || !sessionId) return null;
+  try {
+    if (decodeURIComponent(match[1]) !== sessionId) return null;
+    return match[2].split('/').map(decodeURIComponent).join('/');
+  } catch { return null; }
+}

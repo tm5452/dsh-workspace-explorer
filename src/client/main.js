@@ -1,9 +1,10 @@
 import { Explorer, ExplorerTitle } from '../ui/explorer.js';
 import { explorerCss } from '../ui/styles.js';
 import { scrollHorizontally } from '../ui/horizontal-wheel.js';
-import { underPath, windowsPath } from '../ui/navigation.js';
+import { parentOf, sessionFilePath, underPath, windowsPath } from '../ui/navigation.js';
 import { renameFavorites } from '../ui/favorites.js';
 import { installSidebarMotion } from './sidebar-motion.js';
+import { installConversationDrop } from './conversation-drop.js';
 
 const id = 'dsh-workspace-explorer';
 const inject = ['slots'];
@@ -13,7 +14,7 @@ const instancePrefix = 'dsh-resource://workspace-explorer/tab/';
 function apply(ctx) {
   if (location.protocol !== 'dsh-app:' || location.hostname !== 'app') return;
   if (!navigator.platform.startsWith('Win')) return;
-  ctx.inject(['sidebarRightTabs', 'sidebarRight', 'remote', 'remote.session'], (scope) => {
+  ctx.inject(['sidebarRightTabs', 'sidebarRight', 'remote', 'remote.session', 'remote.workspaceFiles'], (scope) => {
     const sidebar = scope.sidebarRight;
     const bindings = new Map();
     const folderTabs = new Map();
@@ -55,6 +56,11 @@ function apply(ctx) {
       };
       view.bindFileActions = actions => {
         view.fileActions = actions;
+        if (view.pendingPreview) {
+          const preview = view.pendingPreview;
+          view.pendingPreview = undefined;
+          actions.reveal(...preview);
+        }
         return () => { view.fileActions = undefined; };
       };
       return view;
@@ -206,15 +212,99 @@ function apply(ctx) {
       if (!result.ok) throw result.error;
     };
 
+    function openDocument(address, options) {
+      sidebar.openResource(address, { ...options, kind: 'text' });
+    }
+
     function openFolderTab(path, paneId) {
       const address = instancePrefix + crypto.randomUUID();
       folderTabs.set(address, path);
       try {
         sidebar.openResource(address, { kind: 'files', paneId });
         syncTabs();
+        const tab = sidebar.active();
+        return tab?.contentId === address ? bindings.get(tab.id) : undefined;
       } finally {
         folderTabs.delete(address);
       }
+    }
+
+    async function statFile(sessionId, file, signal) {
+      try {
+        const result = await scope.remote.workspaceFiles.stat(sessionId, file, signal);
+        const absolute = windowsPath(result.ok && result.value.absolutePath);
+        if (absolute) return { absolute, name: absolute.split('\\').at(-1), size: result.value.bytes };
+      } catch { /* The built-in preview can report a failed session file lookup. */ }
+    }
+
+    function revealFile(view, file, line) {
+      const preview = [file.absolute, file.name, file.size, line];
+      if (view.fileActions) view.fileActions.reveal(...preview);
+      else view.pendingPreview = preview;
+    }
+
+    function fileRequest(address, options) {
+      const sessionId = sidebar.mounted.getSnapshot();
+      const file = workspace && sessionId === presentedSession && sessionFilePath(address, sessionId);
+      if (file) return { address, sessionId, file, params: options?.params };
+    }
+
+    function currentExplorer() {
+      return bindings.get(sidebar.active()?.id) ?? activeView ?? viewList[0];
+    }
+
+    async function openConversationFile(request, signal, { view, newTab, paneId }) {
+      const { address, sessionId, file, params } = request;
+      const metadata = await statFile(sessionId, file, signal);
+      if (signal.aborted || sidebar.mounted.getSnapshot() !== sessionId) return;
+      if (!metadata) {
+        openDocument(address, { params, paneId });
+        return;
+      }
+      const existing = newTab ? undefined : viewList.includes(view) ? view : currentExplorer();
+      const tabId = existing && [...bindings].find(([, item]) => item === existing)?.[0];
+      if (tabId) {
+        sidebar.focus(tabId);
+        if (!sidebar.isExpanded() && !existing.target?.isFloating) sidebar.toggleExpanded();
+      }
+      const target = tabId ? existing : openFolderTab(parentOf(metadata.absolute), paneId);
+      if (target) revealFile(target, metadata, params?.line);
+    }
+
+    function installFileOpener() {
+      const openResource = sidebar.openResource;
+      let fileClick;
+      let dragSource;
+      function open(address, options) {
+        const request = (!options || Object.keys(options).every(key => key === 'params')) && fileRequest(address, options);
+        if (!request) return openResource.call(this, address, options);
+        if (dragSource) {
+          dragSource.file = request;
+          return;
+        }
+        fileClick?.abort();
+        fileClick = new AbortController();
+        void openConversationFile(request, fileClick.signal, { view: currentExplorer() });
+      }
+      function readDragSource(button) {
+        // Let Harness resolve the same path and line as a real click, without opening a tab yet.
+        const capture = {};
+        dragSource = capture;
+        try { button.click(); }
+        finally { dragSource = undefined; }
+        return capture.file;
+      }
+      sidebar.openResource = open;
+      const stopDrop = installConversationDrop(sidebar.mounted, readDragSource, (request, paneId, signal) => {
+        void openConversationFile(request, signal, { newTab: true, paneId });
+      });
+      const stop = sidebar.mounted.subscribe(() => fileClick?.abort());
+      return () => {
+        stopDrop();
+        stop();
+        fileClick?.abort();
+        if (sidebar.openResource === open) sidebar.openResource = openResource;
+      };
     }
 
     function refreshDirectories(paths, moved = []) {
@@ -233,13 +323,14 @@ function apply(ctx) {
     }
 
     function Anchor({ sessionId, useTabInfo }) {
-      const { tab } = useTabInfo();
+      const { tab, panel } = useTabInfo();
       const anchor = react.useRef(null);
       const view = react.useSyncExternalStore(subscribe, () => boundView(sessionId, tab.id));
+      const navigation = tab.navigation;
       react.useLayoutEffect(() => {
         if (!tab.visible || !view) return;
         const element = anchor.current;
-        const target = { sessionId, actions: tab.actions };
+        const target = { sessionId, paneId: panel.id, isFloating: panel.isFloating };
         view.target = target;
         element.appendChild(view.host);
         notify();
@@ -253,7 +344,31 @@ function apply(ctx) {
           notify();
           capturePresentation(sessionId);
         };
-      }, [view, sessionId, tab.visible, tab.actions]);
+      }, [view, sessionId, tab.visible, tab.actions, panel.id, panel.isFloating]);
+      react.useEffect(() => {
+        if (!tab.visible || !view || view.handledNavigation === navigation) return;
+        const { address, params } = navigation;
+        const file = sessionFilePath(address, sessionId);
+        if (!file) return;
+
+        const controller = new AbortController();
+        const { signal } = controller;
+        const isCurrent = () => !signal.aborted && !tab.signal?.aborted
+          && sidebar.mounted.getSnapshot() === sessionId && boundView(sessionId, tab.id) === view;
+        async function reveal() {
+          const metadata = await statFile(sessionId, file, signal);
+          if (!isCurrent()) return;
+          view.handledNavigation = navigation;
+          if (metadata) {
+            view.revealedFile = true;
+            revealFile(view, metadata, params?.line);
+          } else {
+            openDocument(address, { paneId: panel.id, params, replaceTab: view.revealedFile ? undefined : tab.id });
+          }
+        }
+        void reveal();
+        return () => controller.abort();
+      }, [view, sessionId, tab.id, tab.visible, navigation, panel.id]);
       return h('div', { className: 'dwe-host', ref: anchor });
     }
 
@@ -271,7 +386,7 @@ function apply(ctx) {
       const sessionId = target?.sessionId;
       return reactDom.createPortal(h(Explorer, {
         sessionId, cwd, initialPath: view.initialPath, getTarget: view.getTarget, bindFileActions: view.bindFileActions,
-        onPath: view.onPath, openLocal, openFolderTab, refreshDirectories, updateRenamedPath,
+        onPath: view.onPath, openLocal, openDocument, openFolderTab, refreshDirectories, updateRenamedPath,
       }), view.host);
     }
 
@@ -300,10 +415,12 @@ function apply(ctx) {
         }
       }
       document.addEventListener('wheel', wheel, { passive: false, capture: true });
+      const disposeFileOpener = installFileOpener();
       const disposeMotion = installSidebarMotion(sidebar);
       const disposeTabs = sidebar.openTabs.subscribe(syncTabs);
       const disposeSwitch = sidebar.mounted.subscribe(closeDepartingTabs);
       return () => {
+        disposeFileOpener();
         disposeMotion();
         disposeTabs();
         disposeSwitch();

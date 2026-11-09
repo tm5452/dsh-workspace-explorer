@@ -167,7 +167,7 @@ function PreviewDivider({ root, ratio, setRatio }) {
 }
 
 export function Explorer({
-  cwd, sessionId, initialPath, bindFileActions, getTarget, onPath, openLocal, openFolderTab,
+  cwd, sessionId, initialPath, bindFileActions, getTarget, onPath, openLocal, openDocument, openFolderTab,
   refreshDirectories, updateRenamedPath,
 }) {
   const workspace = windowsPath(cwd);
@@ -315,7 +315,6 @@ export function Explorer({
   }, [root, term, revision, sessionId]);
 
   useEffect(() => () => pathRequest.current?.abort(), []);
-  useLayoutEffect(() => bindFileActions({ refresh, rename }), [bindFileActions, refresh, rename]);
   useLayoutEffect(() => { scroll.current.scrollTop = 0; }, [path, term]);
   useLayoutEffect(() => {
     const result = resultToReveal.current;
@@ -340,20 +339,33 @@ export function Explorer({
     changeHistory(value => move(value, delta));
   }
 
-  function openPreview(absolute, name, size) {
-    setPreview(current => current?.absolute === absolute ? current : {
-      name, absolute, size, address: resourceAddress(absolute),
+  const openPreview = useCallback((absolute, name, size, line) => {
+    const targetLine = Number.isSafeInteger(line) && line > 0 ? line : undefined;
+    setPreview(current => current?.absolute === absolute && !targetLine ? current : {
+      name, absolute, size, line: targetLine, address: resourceAddress(absolute),
     });
-  }
+  }, []);
+
+  const revealFile = useCallback((absolute, name, size, line) => {
+    const folder = parentOf(absolute);
+    if (workspaceMode && !underPath(folder, root)) {
+      resetNavigation();
+      setScoped(null);
+      setLocalHistory(history => visit(history, folder));
+    } else {
+      navigate(folder);
+      if (folder === path && ready && !ready.entries.some(entry => entry.name === name)) refresh();
+    }
+    resultToReveal.current = { folder, name };
+    setSelection(singleSelection(name));
+    openPreview(absolute, name, size, line);
+    setPreviewOpen(true);
+  }, [workspaceMode, root, path, ready, resetNavigation, navigate, refresh, openPreview]);
+
+  useLayoutEffect(() => bindFileActions({ refresh, rename, reveal: revealFile }), [bindFileActions, refresh, rename, revealFile]);
 
   function openSearchHit(match) {
-    if (!underPath(match.path, root)) return;
-    const folder = parentOf(match.path);
-    navigate(folder);
-    resultToReveal.current = { folder, name: match.name };
-    setSelection(singleSelection(match.name));
-    openPreview(match.path, match.name);
-    setPreviewOpen(true);
+    if (underPath(match.path, root)) revealFile(match.path, match.name);
   }
 
   function select(event, entry) {
@@ -513,7 +525,9 @@ export function Explorer({
     if (!target || !shownPreview) return;
     try {
       if (root) await disks.locate(shownPreview.absolute, undefined, root);
-      if (getTarget() === target) target.actions.openResource(resourceAddress(shownPreview.absolute, target.sessionId));
+      if (getTarget() === target) openDocument(resourceAddress(shownPreview.absolute, target.sessionId), {
+        paneId: target.paneId, params: shownPreview.line ? { line: shownPreview.line } : undefined,
+      });
     } catch (error) {
       setActionError(error?.message || String(error));
     }

@@ -19,7 +19,7 @@ dsh plugin --profile web add dsh-workspace-explorer
 在 Harness 的「插件 → 添加插件」中粘贴下方安装包链接，也可粘贴已下载的本地 `.tgz` 路径：
 
 ```text
-https://github.com/tm5452/dsh-workspace-explorer/releases/download/v1.1.0/dsh-workspace-explorer-1.1.0.tgz
+https://github.com/tm5452/dsh-workspace-explorer/releases/download/v1.1.1/dsh-workspace-explorer-1.1.1.tgz
 ```
 
 已安装早期预览包的用户，先在插件列表移除旧条目，再重新安装。发布变更见 [版本记录](CHANGELOG.md)。
@@ -56,7 +56,7 @@ https://github.com/tm5452/dsh-workspace-explorer/releases/download/v1.1.0/dsh-wo
 
 **每个目录记住自己的视图。** 底部可切换列表和大图标。列表显示名称、类型和大小。大图标可直接看到图片和可解码视频的缩略图。下次进入同一目录，会沿用上次的选择。
 
-**收藏常用目录。** 点地址栏旁的星标收藏当前文件夹。悬浮收藏夹只显示文件夹名，点击即可直达，操作面板外的内容时会自动收起。移除单项或清空只修改收藏记录。
+**收藏常用目录。** 点地址栏旁的星标收藏当前文件夹。点击收藏项即可直达，也可以上下拖动排序，顺序会自动保存。操作面板外的内容时会自动收起。移除单项或清空只修改收藏记录。
 
 ## 确认文件内容，再决定怎么用
 
@@ -84,7 +84,9 @@ https://github.com/tm5452/dsh-workspace-explorer/releases/download/v1.1.0/dsh-wo
 
 侧栏需要完整读取的格式，单文件上限为 32 MB。7Z、RAR 等压缩包可双击用 Windows 默认应用打开。
 
-## 让文件进入当前会话
+## 在会话与文件之间切换
+
+**打开会话里的文件。** 点击 AI 交付的文件卡片或回复中的本地文件链接，当前文件浏览页会跳到所在文件夹、选中文件并显示预览。把卡片或链接拖到右侧标出的区域，可在新标签页预览。预览栏右上角仍可使用 DSH 原生文档预览。
 
 **拖入文件就是添加附件。** 从列表或大图标视图把文件拖到左侧输入框，文件会加入当前会话的草稿，发送前仍可检查。遇到 DSH 无法接收的文件，可右键「复制文件路径」，再把路径粘贴到对话里。
 

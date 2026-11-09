@@ -206,6 +206,7 @@ window.__ModuleLoader__.load({
 		// Frozen platform table entries (see the shell's static module table).
 		var react = require("react");
 		var reactDom = require("react-dom");
+		var reactDomClient = require("react-dom/client");
 		var jsxRuntime = require("react/jsx-runtime");
 		var primitives = require("@deepseek-ai/dsh-client-ui-primitives");
 

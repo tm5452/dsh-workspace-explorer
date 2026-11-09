@@ -7,7 +7,7 @@ import { PreviewUnavailable } from './preview-unavailable.js';
 import { PdfPreview } from './pdf-preview.js';
 import { usePreviewZoom } from './preview-zoom.js';
 
-const { createElement: h, useEffect, useRef, useState } = react;
+const { createElement: h, useEffect, useLayoutEffect, useRef, useState } = react;
 const coverActions = {
   [PREVIEW_IDS.archive]: '解压预览',
   [PREVIEW_IDS.model]: '查看模型',
@@ -113,6 +113,27 @@ function ImagePreview({ url, name, onError }) {
     }));
 }
 
+function TextPreview({ text, eof, file }) {
+  const content = useRef(null);
+  useLayoutEffect(() => {
+    if (!file.line || !text) return;
+    let offset = 0;
+    for (let line = 1; line < file.line; line++) {
+      const end = text.indexOf('\n', offset);
+      if (end < 0) return;
+      offset = end + 1;
+    }
+    if (offset === text.length) return;
+    const range = document.createRange();
+    range.setStart(content.current.firstChild, offset);
+    range.setEnd(content.current.firstChild, offset + 1);
+    const scroll = content.current.parentElement;
+    scroll.scrollTop += range.getBoundingClientRect().top - scroll.getBoundingClientRect().top - 12;
+  }, [file, text]);
+  return h('pre', { ref: content, className: 'dwe-text' },
+    text || '（空文件）', eof ? '' : '\n\n… 仅显示首页，可在原生预览中继续查看');
+}
+
 export function Preview({ file, root }) {
   const [result, setResult] = useState({ kind: 'loading' });
   const [started, setStarted] = useState(false);
@@ -181,8 +202,7 @@ export function Preview({ file, root }) {
         onError: () => setResult({ kind: 'unavailable' }),
       });
     case 'text':
-      return h('pre', { className: 'dwe-text' },
-        result.text || '（空文件）', result.eof ? '' : '\n\n… 仅显示首页，可在原生预览中继续查看');
+      return h(TextPreview, { text: result.text, eof: result.eof, file });
     case 'unavailable':
       return h(PreviewUnavailable);
     default:
