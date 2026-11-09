@@ -174,14 +174,12 @@ export function Explorer({
   const [localHistory, setLocalHistory] = useState(() => firstPath(initialPath ?? workspace));
   const [scoped, setScoped] = useState(null);
   const workspaceMode = scoped !== null;
-  const root = workspaceMode ? (sessionId ? workspace : scoped.root) : null;
-  const history = workspaceMode ? (root === scoped.root ? scoped.history : firstPath(root)) : localHistory;
+  const root = scoped?.root ?? null;
+  const history = scoped?.history ?? localHistory;
   const changeHistory = useCallback(change => {
-    if (workspaceMode) setScoped(current => current && {
-      root, history: change(current.root === root ? current.history : firstPath(root)),
-    });
+    if (workspaceMode) setScoped(current => current && { ...current, history: change(current.history) });
     else setLocalHistory(change);
-  }, [workspaceMode, root]);
+  }, [workspaceMode]);
   const [revision, setRevision] = useState(0);
   const [listing, setListing] = useState(null);
   const [selection, setSelection] = useState(emptySelection);
@@ -286,12 +284,6 @@ export function Explorer({
     resetNavigation();
     setScoped(workspaceMode ? null : { root: workspace, history: firstPath(workspace) });
   }
-
-  useLayoutEffect(() => {
-    if (!workspaceMode || !root || root === scoped.root) return;
-    resetNavigation();
-    setScoped({ root, history: firstPath(root) });
-  }, [workspaceMode, root, scoped?.root, resetNavigation]);
 
   useLayoutEffect(() => { onPath(path); }, [onPath, path]);
 
