@@ -7,7 +7,7 @@ const imageTypes = new Map([
   ['gif', 'image/gif'], ['webp', 'image/webp'],
 ]);
 
-export function useComposerDrop(sessionId, reportError) {
+export function useComposerDrop(sessionId, openFolderTab, reportError, root) {
   const active = useRef(null);
 
   useEffect(() => {
@@ -15,12 +15,14 @@ export function useComposerDrop(sessionId, reportError) {
     const lifetime = new AbortController();
     const signal = lifetime.signal;
     let highlighted;
+    let highlightClass;
 
-    function highlight(card) {
-      if (card === highlighted) return;
-      highlighted?.classList.remove('dwe-drop-target');
-      highlighted = card;
-      highlighted?.classList.add('dwe-drop-target');
+    function highlight(element, className) {
+      if (element === highlighted && className === highlightClass) return;
+      if (highlighted) highlighted.classList.remove(highlightClass);
+      highlighted = element;
+      highlightClass = className;
+      if (highlighted) highlighted.classList.add(highlightClass);
     }
 
     function targetCard(target) {
@@ -32,9 +34,17 @@ export function useComposerDrop(sessionId, reportError) {
     }
 
     function over(event) {
-      if (!active.current || !event.dataTransfer?.types.includes(dragType)) return;
+      const drag = active.current;
+      if (!drag || !event.dataTransfer?.types.includes(dragType)) return;
+      const strip = drag.folder && tabStrip(event.target);
+      if (strip) {
+        highlight(strip, 'dwe-tab-drop-target');
+        event.preventDefault();
+        event.dataTransfer.dropEffect = 'copy';
+        return;
+      }
       const card = targetCard(event.target);
-      highlight(card);
+      highlight(card, 'dwe-drop-target');
       if (!card) return;
       event.preventDefault();
       event.dataTransfer.dropEffect = 'copy';
@@ -48,13 +58,27 @@ export function useComposerDrop(sessionId, reportError) {
     async function drop(event) {
       const file = active.current;
       if (!file || event.dataTransfer?.getData(dragType) !== file.token) return;
+      const strip = file.folder && tabStrip(event.target);
       const card = targetCard(event.target);
       reset();
-      if (!card) return;
+      if (!strip && !card) return;
       event.preventDefault();
+      event.stopPropagation();
       reportError('');
       try {
-        const bytes = await disks.readBytes(file.path, signal);
+        if (strip) {
+          openFolderTab(file.path, strip.dataset.dockkitStrip);
+          return;
+        }
+        if (file.folder) {
+          const editor = card.querySelector('[data-composer-input][contenteditable="true"]');
+          const data = new DataTransfer();
+          data.setData('text/plain', file.path);
+          editor.focus({ preventScroll: true });
+          editor.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: data }));
+          return;
+        }
+        const bytes = await disks.readBytes(file.path, signal, root);
         // The composer may have switched sessions or become locked during the read.
         if (signal.aborted || !card.isConnected || targetCard(card) !== card) return;
         const extension = file.name.split('.').at(-1)?.toLowerCase();
@@ -69,23 +93,27 @@ export function useComposerDrop(sessionId, reportError) {
       }
     }
 
-    document.addEventListener('dragover', over, { signal });
-    document.addEventListener('drop', drop, { signal });
+    document.addEventListener('dragover', over, { signal, capture: true });
+    document.addEventListener('drop', drop, { signal, capture: true });
     window.addEventListener('dragend', reset, { signal });
     return () => {
       lifetime.abort();
       reset();
     };
-  }, [sessionId, reportError]);
+  }, [sessionId, openFolderTab, reportError, root]);
 
-  return (event, path, name) => {
+  return (event, path, name, folder = false) => {
     if (!sessionId) {
       event.preventDefault();
       return;
     }
     const token = crypto.randomUUID();
-    active.current = { token, path, name };
+    active.current = { token, path, name, folder };
     event.dataTransfer.effectAllowed = 'copy';
     event.dataTransfer.setData(dragType, token);
   };
+}
+
+function tabStrip(target) {
+  return target instanceof Element ? target.closest('[data-dockkit-strip]') : null;
 }

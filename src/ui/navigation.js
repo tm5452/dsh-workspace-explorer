@@ -24,6 +24,17 @@ export function parentOf(path) {
   return path.slice(0, Math.max(3, path.lastIndexOf('\\')));
 }
 
+export function underPath(path, root) {
+  if (!path || !root) return false;
+  const value = path.toLowerCase();
+  const prefix = root.toLowerCase();
+  return value === prefix || value.startsWith(prefix.endsWith('\\') ? prefix : prefix + '\\');
+}
+
+export function renamePath(path, from, to) {
+  return underPath(path, from) ? to + path.slice(from.length) : path;
+}
+
 export function resourceAddress(path, sessionId) {
   const encoded = path.split('\\').map(segment => encodeURIComponent(segment).replace(/%3A/gi, ':')).join('/');
   return 'dsh-resource://file/' + (sessionId ? 'session/' + encodeURIComponent(sessionId) : 'absolute') + '/' + encoded;

@@ -21,7 +21,7 @@ export class PreviewBoundary extends react.Component {
   }
 }
 
-export function Preview({ file }) {
+export function Preview({ file, root }) {
   const [result, setResult] = useState({ kind: 'loading' });
 
   useEffect(() => {
@@ -36,7 +36,7 @@ export function Preview({ file }) {
     async function load() {
       try {
         if (Body || mime) {
-          const data = await disks.readBytes(file.absolute, signal);
+          const data = await disks.readBytes(file.absolute, signal, root);
           if (signal.aborted) return;
           if (Body) {
             setResult({ kind: 'vendor', Body, data });
@@ -47,7 +47,7 @@ export function Preview({ file }) {
         } else if (nativeFormats.has(extension)) {
           setResult({ kind: 'unavailable' });
         } else {
-          const { text, eof } = await disks.read(file.absolute, signal);
+          const { text, eof } = await disks.read(file.absolute, signal, root);
           if (signal.aborted) return;
           setResult({ kind: 'text', text, eof });
         }
@@ -60,7 +60,7 @@ export function Preview({ file }) {
       controller.abort();
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [file]);
+  }, [file, root]);
 
   switch (result.kind) {
     case 'vendor':
