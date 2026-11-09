@@ -4,16 +4,29 @@
 
 ## 安装
 
-1. 在 Harness 的「插件 → 添加插件」中粘贴下方正式安装包链接，也可粘贴已下载的本地 `.tgz` 路径。
-2. 安装后从系统托盘完全退出 Harness，再重新打开右侧栏的「文件浏览」。
+### 从 npm 安装（推荐）
+
+```bash
+dsh plugin --profile web add dsh-workspace-explorer
+```
+
+也可以在 Harness 的「插件 → 添加插件」里直接输入包名 `dsh-workspace-explorer`，让它自己解析注册表。
+
+安装后从系统托盘完全退出 Harness，再重新打开右侧栏的「文件浏览」。
+
+### 从 GitHub Release 安装
+
+在 Harness 的「插件 → 添加插件」中粘贴下方安装包链接，也可粘贴已下载的本地 `.tgz` 路径：
 
 ```text
 https://github.com/tm5452/dsh-workspace-explorer/releases/download/v1.0.0/dsh-workspace-explorer-1.0.0.tgz
 ```
 
-已安装早期预览包或 `1.1.0-beta.*` 本地测试包的用户，先在插件列表移除旧条目，再用上方链接安装。发布变更见 [版本记录](CHANGELOG.md)。
+已安装早期预览包或 `1.1.0-beta.*` 本地测试包的用户，先在插件列表移除旧条目，再重新安装。发布变更见 [版本记录](CHANGELOG.md)。
 
-从源码安装时，也可将插件目录以 `link:<绝对路径>` 添加。旧的同名插件记录可先从插件列表移除。
+### 从源码安装
+
+将插件目录以 `link:<绝对路径>` 添加。旧的同名插件记录可先从插件列表移除。
 
 ## 界面实拍
 
