@@ -138,8 +138,10 @@ const clampSplit = ratio => Math.min(splitMax, Math.max(splitMin, ratio));
 
 function PreviewDivider({ root, ratio, setRatio }) {
   const grabOffset = useRef(0);
+  const [dragging, setDragging] = useState(false);
   return h('div', {
     className: 'dwe-divider', role: 'separator', tabIndex: 0,
+    'data-dragging': dragging || undefined,
     'aria-label': '调整文件预览分栏高度', 'aria-orientation': 'horizontal',
     'aria-valuemin': splitMin * 100, 'aria-valuemax': splitMax * 100,
     'aria-valuenow': Math.round(ratio * 100),
@@ -147,16 +149,18 @@ function PreviewDivider({ root, ratio, setRatio }) {
       if (event.button !== 0) return;
       event.preventDefault();
       const divider = event.currentTarget;
-      grabOffset.current = event.clientY - divider.getBoundingClientRect().top;
+      const bounds = divider.getBoundingClientRect();
+      grabOffset.current = event.clientY - (bounds.top + bounds.height / 2);
       divider.focus();
       divider.setPointerCapture(event.pointerId);
     },
+    onGotPointerCapture: () => setDragging(true),
+    onLostPointerCapture: () => setDragging(false),
     onPointerMove: event => {
       const divider = event.currentTarget;
       if (!divider.hasPointerCapture(event.pointerId)) return;
       const bounds = root.current.getBoundingClientRect();
-      const available = bounds.height - divider.offsetHeight;
-      if (available > 0) setRatio(clampSplit((event.clientY - bounds.top - grabOffset.current) / available));
+      if (bounds.height > 0) setRatio(clampSplit((event.clientY - bounds.top - grabOffset.current) / bounds.height));
     },
     onKeyDown: event => {
       if (event.key === 'ArrowUp') setRatio(value => clampSplit(value - 0.05));
@@ -660,7 +664,9 @@ export function Explorer({
       h('header', { className: 'dwe-preview-bar' },
         h('span', { className: 'dwe-preview-label' }, '预览'),
         shownPreview && h('span', { className: 'dwe-preview-name', title: shownPreview.absolute },
-          fileIcon(shownPreview.name, 'file'), h('span', null, shownPreview.name)),
+          fileIcon(shownPreview.name, 'file'),
+          h('span', null, shownPreview.name),
+          tool('close', '关闭当前文件预览', () => setPreview(null))),
         shownPreview && tool('external', '在 DSH 文档预览中打开', openNative)),
       h('div', { className: 'dwe-preview-body' },
         shownPreview ? h(PreviewBoundary, { key: JSON.stringify([shownPreview.absolute, root]) }, h(Preview, { file: shownPreview, root }))

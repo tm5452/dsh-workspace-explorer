@@ -19,7 +19,7 @@ dsh plugin --profile web add dsh-workspace-explorer
 在 Harness 的「插件 → 添加插件」中粘贴下方安装包链接，也可粘贴已下载的本地 `.tgz` 路径：
 
 ```text
-https://github.com/tm5452/dsh-workspace-explorer/releases/download/v1.0.0/dsh-workspace-explorer-1.0.0.tgz
+https://github.com/tm5452/dsh-workspace-explorer/releases/download/v1.1.0/dsh-workspace-explorer-1.1.0.tgz
 ```
 
 已安装早期预览包的用户，先在插件列表移除旧条目，再重新安装。发布变更见 [版本记录](CHANGELOG.md)。
@@ -60,25 +60,27 @@ https://github.com/tm5452/dsh-workspace-explorer/releases/download/v1.0.0/dsh-wo
 
 ## 确认文件内容，再决定怎么用
 
-**单击预览，双击打开。** 下方预览窗默认开启，底栏右侧按钮可随时收起或展开，拖动中间的分隔线可调整上下比例。切换文件夹时可继续查看上一次选中的文件。双击文件则交给 Windows 默认应用打开。
+**单击预览，双击打开。** 图片、音频和纯文本单击即预览。其他格式先显示封面，点击对应按钮后才加载内容。视频封面会尝试显示首帧。双击文件可用 Windows 默认应用打开。
 
-**在侧栏查看多种内容。** 可看图片、文本、字幕和字体，播放支持解码的音视频，查看 ZIP 等压缩包的内容，旋转和缩放 STL、OBJ 等 3D 模型，也支持 TOML、KiCad 等部分工程格式。PDF 和 Office 文档可点预览窗右上角的「在 DSH 文档预览中打开」。
+**控制下方预览窗。** 窗格默认开启，底栏右侧按钮可随时收起或展开。分隔线平时显示为细灰线，悬停或拖动时显示手柄。文件名右侧的「×」可单独关闭当前文件预览。切换文件夹时可继续查看上一次选中的文件。
+
+**在侧栏浏览文档并缩放。** PDF 和 Office 文档可上下连续滚动。Office 使用 Harness 本机转换服务，Excel 按打印版式显示。鼠标放在图片或文档内容区时，按住 Ctrl 滚动滚轮可缩放。右上角仍可打开 DSH 文档预览。
 
 | 类别 | 支持格式 | 预览内容 |
 | --- | --- | --- |
 | 图片 | PNG、JPG / JPEG、GIF、WebP、BMP、ICO、AVIF | 显示图片 |
-| 视频 | MP4、WebM、M4V、MOV、MKV | 播放视频，取决于 DSH 内置浏览器能否解码 |
+| 视频 | MP4、WebM、M4V、MOV、MKV 等 | 尝试显示首帧，点击播放。取决于 DSH 内置浏览器能否解码 |
 | 音频 | MP3、WAV、OGG、OGA、M4A、AAC、FLAC、Opus | 播放音频，同样取决于解码支持 |
 | 纯文本与代码 | UTF-8 编码的 TXT、MD、JSON、CSV、HTML、脚本等 | 显示原始文本，最多读取前 2 MB |
 | 字幕 | SRT、VTT、ASS、SSA | 查看字幕时间和正文，也可切换到原始文本 |
 | 字体 | TTF、OTF、WOFF、WOFF2 | 查看字体样张 |
 | 3D 模型 | STL、OBJ、PLY、GLB、glTF | 旋转、缩放、平移模型，可切换线框。glTF 须内嵌模型数据 |
-| 压缩包 | ZIP、JAR、WAR、APK、TAR、GZ、TAR.GZ / TGZ | 浏览包内文件，查看部分条目内容 |
+| 压缩包 | ZIP、JAR、WAR、APK、TAR、GZ、TAR.GZ / TGZ | 点击「解压预览」后浏览包内文件，按需查看条目 |
 | 配置文件 | TOML | 按表查看配置键、类型和值 |
 | 电路设计 | KiCad 原理图 .kicad_sch、PCB .kicad_pcb | 查看图形，支持缩放和平移 |
 | 波形与光谱 | VCD、JCAMP-DX（.jdx、.dx） | 查看信号波形或光谱曲线 |
 | 固件 | Intel HEX（.hex）、DFU（.dfu） | 查看数据地址、数据段和校验信息 |
-| PDF 与 Office | PDF、DOC / DOCX、XLS / XLSX、PPT / PPTX | 交给 DSH 文档预览 |
+| PDF 与 Office | PDF、DOC / DOCX、XLS / XLSX、PPT / PPTX | 点击「查看文档」后连续滚动，支持 Ctrl＋滚轮缩放 |
 
 侧栏需要完整读取的格式，单文件上限为 32 MB。7Z、RAR 等压缩包可双击用 Windows 默认应用打开。
 
@@ -102,6 +104,6 @@ https://github.com/tm5452/dsh-workspace-explorer/releases/download/v1.0.0/dsh-wo
 
 ## 构建
 
-运行 `node scripts/build-client.mjs` 生成 `lib/client.js`。安装目录已包含构建产物。
+从源码安装时，先运行 `npm install` 安装 PDF.js，再运行 `node scripts/build-client.mjs` 生成 `lib/client.js`。发布包已包含构建产物。
 
 扩展预览实现沿用 [dsh-preview-extra](https://github.com/LeiYuXingZhou/dsh-preview-extra)，许可证见 `LICENSE-preview-extra`。

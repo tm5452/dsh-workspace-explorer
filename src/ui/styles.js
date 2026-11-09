@@ -28,25 +28,30 @@ export const explorerCss = `
 .dwe[data-preview-open] {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: minmax(min(var(--dwe-folder-min, 123px), 48%), var(--dwe-upper)) 8px minmax(min(72px, 44%), var(--dwe-lower));
+  grid-template-rows: minmax(min(var(--dwe-folder-min, 123px), 48%), var(--dwe-upper)) 0 minmax(min(72px, 44%), var(--dwe-lower));
 }
 .dwe[data-workspace-mode] { --dwe-folder-min: 155px; }
 .dwe-divider {
-  position: relative; display: grid; place-items: center; cursor: row-resize;
+  position: relative; z-index: 2; align-self: center; height: 8px; box-sizing: border-box;
+  display: grid; place-items: center; cursor: row-resize;
   user-select: none; touch-action: none;
-  background: var(--dwe-tint); border-block: 1px solid var(--dwe-line);
+  background: linear-gradient(var(--dwe-line), var(--dwe-line)) center / 100% 1px no-repeat;
+  border-block: 1px solid transparent;
 }
 .dwe-divider::after {
-  content: ''; width: 30px; height: 2px; border-radius: 2px; background: currentColor; opacity: .3;
+  content: ''; width: 30px; height: 2px; border-radius: 2px; background: currentColor; opacity: 0;
 }
-.dwe-divider:hover, .dwe-divider:focus-visible { background: var(--dwe-hover); }
+.dwe-divider:is(:hover, :focus-visible, [data-dragging]) {
+  background: var(--dwe-hover); border-color: var(--dwe-line);
+}
+.dwe-divider:is(:hover, :focus-visible, [data-dragging])::after { opacity: .3; }
 .dwe-divider:focus-visible { outline: 2px solid var(--dwe-blue); outline-offset: -2px; }
 .dwe-toolbar, .dwe-preview-bar {
   display: flex; flex: none; align-items: center; gap: 6px;
-  padding: 5px 8px; min-width: 0; border-bottom: 1px solid var(--dwe-line);
+  padding: 3px 8px; min-width: 0; border-bottom: 1px solid var(--dwe-line);
 }
 .dwe-address-bar { display: flex; min-width: 0; flex: none; align-items: center; gap: 3px; padding: 5px 8px 0; }
-.dwe-toolbar { justify-content: space-between; gap: 4px; padding-block: 3px; overflow-x: auto; scrollbar-width: none; }
+.dwe-toolbar { justify-content: space-between; gap: 4px; overflow-x: auto; scrollbar-width: none; }
 .dwe-nav { display: flex; align-items: center; gap: 2px; flex: none; }
 .dwe button {
   font: inherit; color: inherit; border: 0; background: transparent; cursor: default;
@@ -160,10 +165,10 @@ export const explorerCss = `
 }
 .dwe-name, .dwe-preview-name { display: flex; align-items: center; gap: 7px; }
 .dwe-name svg, .dwe-preview-name svg { flex: none; }
-.dwe-name > span:last-child, .dwe-preview-name > span:last-child {
+.dwe-name > span:last-child, .dwe-preview-name > span {
   min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.dwe-meta, .dwe-status, .dwe-preview-label { opacity: .72; font-size: 12px; }
+.dwe-meta, .dwe-status { opacity: .72; font-size: 12px; }
 .dwe-status { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dwe-status-bar {
   flex: none; display: flex; align-items: center; justify-content: space-between; gap: 4px;
@@ -172,15 +177,53 @@ export const explorerCss = `
 .dwe-preview {
   min-height: 0; display: flex; flex-direction: column;
 }
-.dwe-preview-bar { background: var(--dwe-tint); }
-.dwe-preview-label { flex: none; margin-inline: 4px; }
-.dwe-preview-name { flex: 1; min-width: 0; font-weight: 600; }
+.dwe-preview-bar { background: var(--dsw-alias-bg-base, Canvas); }
+.dwe-preview-label { flex: none; margin-inline: 4px; line-height: 28px; }
+.dwe-preview-name {
+  min-width: 0; height: 28px; box-sizing: border-box; padding-inline: 7px 3px;
+  border: 1px solid var(--dwe-line); border-radius: 6px;
+}
+.dwe-preview-name > .dwe-tool { width: 22px; height: 22px; flex-basis: 22px; }
+.dwe-preview-bar > .dwe-tool { margin-inline-start: auto; }
 .dwe-preview-body { flex: 1 1 auto; min-height: 0; overflow: auto; }
+.dwe-preview-cover {
+  position: relative; display: grid; place-items: center; isolation: isolate;
+  height: 100%; min-height: 100px; overflow: hidden; background: var(--dwe-tint);
+}
+.dwe-preview-cover[data-poster] { background: #15171a; }
+.dwe-preview-cover > img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; z-index: -1; }
+.dwe-cover-action { display: flex; align-items: center; gap: 10px; }
+.dwe .dwe-cover-play {
+  display: grid; place-items: center; width: 52px; height: 52px; border-radius: 50%;
+  background: #243953; color: #fff; box-shadow: 0 2px 8px #0003; cursor: pointer;
+}
+.dwe .dwe-cover-play:hover:not(:disabled) { background: #34577f; }
+.dwe .dwe-cover-open {
+  padding: 7px 12px; border: 1px solid var(--dwe-line); border-radius: 6px;
+  background: var(--dsw-alias-bg-base, Canvas); white-space: nowrap; cursor: pointer;
+}
+.dwe-cover-file {
+  position: absolute; inset-block-end: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  max-width: calc(100% - 24px); padding: 3px 8px; border-radius: 5px;
+}
+.dwe-preview-cover[data-poster] .dwe-cover-file { background: #15171abb; color: #fff; }
+.dwe-pdf-scroll {
+  height: 100%; overflow: auto; scrollbar-gutter: stable both-edges; background: var(--dwe-tint);
+}
+.dwe-pdf-scroll:focus-visible, .dwe-image-scroll:focus-visible { outline: 2px solid var(--dwe-blue); outline-offset: -2px; }
+.dwe [data-dwe-zoom-surface] { width: calc(var(--dwe-fit-width) * var(--dwe-preview-zoom, 1)); }
+.dwe-pdf-page {
+  height: calc(var(--dwe-fit-height) * var(--dwe-preview-zoom, 1));
+  margin: 8px auto; background: white; color: #202124; box-shadow: 0 1px 3px #0002;
+}
+.dwe-pdf-page canvas:not([hidden]) { display: block; width: 100%; height: 100%; }
+.dwe-pdf-more { height: 1px; }
 .dwe-preview-hint {
   display: grid; place-items: center; min-height: 100%; margin: 0; padding: 12px; box-sizing: border-box;
   color: color-mix(in srgb, currentColor 62%, transparent); text-align: center; font-weight: 400;
 }
-.dwe-image { display: block; max-width: 100%; max-height: 100%; object-fit: contain; margin-inline: auto; }
+.dwe-image-scroll { height: 100%; overflow: auto; }
+.dwe-image { display: block; height: auto; margin-inline: auto; }
 .dwe-text { margin: 0; padding: 12px; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.55 monospace; }
 .dwe-message { padding: 0 12px; margin: 12px 0; overflow-wrap: anywhere; }
 .dwe-error { color: var(--dsw-alias-text-error, #cf4d52); }

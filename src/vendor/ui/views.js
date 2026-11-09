@@ -1348,8 +1348,8 @@ export function MediaPreviewBody(props) {
   const fileName = useFileName(props);
   const data = bytesOf(props.content);
   const ext = extensionOf(fileName);
-  const kind = mediaKindOf(ext, fileName);
-  const mime = mediaMimeOf(ext, kind);
+  const kind = props.videoType ? 'video' : mediaKindOf(ext, fileName);
+  const mime = props.videoType ?? mediaMimeOf(ext, kind);
 
   const [url, setUrl] = react.useState(null);
   const [failed, setFailed] = react.useState(false);
@@ -1409,6 +1409,7 @@ export function MediaPreviewBody(props) {
       h(kind === 'video' ? 'video' : 'audio', {
         src: url,
         controls: true,
+        autoPlay: kind === 'video' && props.autoPlay === true,
         preload: 'metadata',
         className: cx('dshpx-media', kind === 'audio' && 'dshpx-media-audio'),
         onError: handleError,

@@ -32,7 +32,7 @@ function waitForFrame(media, event, signal) {
   });
 }
 
-async function makeThumbnail(path, type, signal, root) {
+export async function makeThumbnail(path, type, signal, root, poster = false) {
   const { url } = await disks.thumbnail(path, signal, root);
   signal.throwIfAborted();
   const video = type.startsWith('video/');
@@ -42,7 +42,7 @@ async function makeThumbnail(path, type, signal, root) {
     const firstFrame = waitForFrame(media, video ? 'loadeddata' : 'load', signal);
     media.src = url;
     await firstFrame;
-    if (video && Number.isFinite(media.duration) && media.duration > 0.2) {
+    if (video && !poster && Number.isFinite(media.duration) && media.duration > 0.2) {
       const seeked = waitForFrame(media, 'seeked', signal);
       media.currentTime = Math.min(0.7, media.duration * 0.12);
       await seeked;
@@ -50,7 +50,8 @@ async function makeThumbnail(path, type, signal, root) {
     const width = video ? media.videoWidth : media.naturalWidth;
     const height = video ? media.videoHeight : media.naturalHeight;
     if (!width || !height) throw new Error('缩略图为空');
-    const scale = Math.min(192 / width, 136 / height);
+    const [maxWidth, maxHeight] = poster ? [640, 360] : [192, 136];
+    const scale = Math.min(maxWidth / width, maxHeight / height, poster ? 1 : Infinity);
     const canvas = document.createElement('canvas');
     canvas.width = Math.max(1, Math.round(width * scale));
     canvas.height = Math.max(1, Math.round(height * scale));

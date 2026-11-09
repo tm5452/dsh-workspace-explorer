@@ -4,8 +4,10 @@ import { lstat, open, opendir, readlink, realpath, stat } from 'node:fs/promises
 import { win32 as path } from 'node:path';
 import { Readable } from 'node:stream';
 import { promisify } from 'node:util';
+import { officeExtensions } from '../document-types.js';
 import { thumbnailType } from '../thumbnail-types.js';
 import { underPath } from '../ui/navigation.js';
+import { registerPdfAssets } from './pdf-assets.js';
 import { windowsFileOperation } from './shell-files.js';
 
 const execute = promisify(execFile);
@@ -48,6 +50,21 @@ function operationPaths(input) {
     throw new BrowseError('一次可操作 1 到 ' + maxFileOperations + ' 个项目');
   }
   return [...new Set(paths.map(normalizeLocalPath))];
+}
+
+function fileVersion(info) {
+  return JSON.stringify([info.dev, info.ino, info.size, info.mtimeMs, info.ctimeMs]);
+}
+
+function decodePreviewText(data, eof) {
+  let text;
+  try {
+    text = new TextDecoder('utf-8', { fatal: true }).decode(data, { stream: !eof });
+  } catch {
+    throw new BrowseError('此文件不是 UTF-8 文本');
+  }
+  if (text.includes('\0')) throw new BrowseError('此格式没有可用的文本预览');
+  return text;
 }
 
 async function scanDrives() {
@@ -205,7 +222,7 @@ function createDiskAccess() {
     return { matches, truncated: false, skipped };
   }
 
-  async function read(input, limit, signal, workspace) {
+  async function read(input, limit, signal, workspace, { version, sniffText } = {}) {
     const target = await resolve(input, signal, workspace);
     const info = await stat(target);
     if (!info.isFile()) throw new BrowseError('只能预览普通文件');
@@ -214,20 +231,49 @@ function createDiskAccess() {
     try {
       const opened = await handle.stat();
       if (!opened.isFile()) throw new BrowseError('只能预览普通文件');
+      if (version && fileVersion(opened) !== version) throw new BrowseError('文件已改变，请重新预览', 409);
       const buffer = Buffer.allocUnsafe(Math.min(opened.size, limit) + 1);
       let length = 0;
       while (length < buffer.length) {
         signal.throwIfAborted();
-        const { bytesRead } = await handle.read(buffer, length, buffer.length - length, length);
+        const readSize = sniffText && length === 0 ? Math.min(4096, buffer.length) : buffer.length - length;
+        const { bytesRead } = await handle.read(buffer, length, readSize, length);
         if (!bytesRead) break;
+        if (sniffText && length === 0) decodePreviewText(buffer.subarray(0, bytesRead), false);
         length += bytesRead;
       }
       const eof = length <= limit && length <= opened.size;
       if (limit === maxBytes && (!eof || opened.size > limit)) throw new BrowseError('文件超过 32 MB 读取上限', 413);
+      if (version && (!eof || fileVersion(await handle.stat()) !== version)) {
+        throw new BrowseError('文件已改变，请重新预览', 409);
+      }
       return { data: buffer.subarray(0, Math.min(length, limit)), eof };
     } finally {
       await handle.close();
     }
+  }
+
+  async function renderOffice(input, signal, workspace, converter) {
+    const absolute = normalizeLocalPath(input);
+    const extension = path.extname(absolute).slice(1).toLowerCase();
+    if (!officeExtensions.has(extension)) throw new BrowseError('不是可预览的 Office 格式');
+    const target = await resolve(absolute, signal, workspace);
+    const info = await stat(target);
+    if (!info.isFile()) throw new BrowseError('只能预览普通文件');
+    if (info.size > maxBytes) throw new BrowseError('文件超过 32 MB 读取上限', 413);
+    const version = fileVersion(info);
+    const result = await converter.convert({
+      extension, priority: 'foreground',
+      source: {
+        key: JSON.stringify(['dsh-workspace-explorer', workspace?.nativeRoot, target]),
+        version, bytes: info.size,
+        read: async (readSignal, budget) => {
+          const { data } = await read(absolute, Math.min(budget, maxBytes), readSignal, workspace, { version });
+          return { bytes: data, version };
+        },
+      },
+    }, signal);
+    return result.pdf;
   }
 
   async function locate(input, signal, workspace) {
@@ -401,7 +447,7 @@ function createDiskAccess() {
     }
   }
 
-  return { list, read, locate, thumbnail, stage, rename, paste, recycle, scope, search };
+  return { list, read, renderOffice, locate, thumbnail, stage, rename, paste, recycle, scope, search };
 }
 
 function byteRange(value, size) {
@@ -428,6 +474,7 @@ function json(value, status = 200) {
 
 export function registerDesktopFiles(ctx) {
   const disks = createDiskAccess();
+  registerPdfAssets(ctx);
   let writes = Promise.resolve();
   function write(action) {
     const result = writes.then(action);
@@ -513,20 +560,18 @@ export function registerDesktopFiles(ctx) {
           return json({ url: thumbnailEndpoint + '?ticket=' + token });
         }
         if (operation === 'text') {
-          const { data, eof } = await disks.read(input, maxText, signal, workspace);
-          let text;
-          try {
-            text = new TextDecoder('utf-8', { fatal: true }).decode(data, { stream: !eof });
-          } catch {
-            throw new BrowseError('此文件不是 UTF-8 文本');
-          }
-          if (text.includes('\0')) throw new BrowseError('此格式没有可用的文本预览');
-          return json({ text, eof });
+          const { data, eof } = await disks.read(input, maxText, signal, workspace, { sniffText: true });
+          return json({ text: decodePreviewText(data, eof), eof });
         }
-        if (operation === 'bytes') {
-          const { data } = await disks.read(input, maxBytes, signal, workspace);
+        if (operation === 'bytes' || operation === 'office') {
+          const converter = operation === 'office' ? ctx.officeToPdf : undefined;
+          if (operation === 'office' && !converter) return json({ error: '当前 DSH 未提供 Office 转换服务' }, 503);
+          const data = converter
+            ? await disks.renderOffice(input, signal, workspace, converter)
+            : (await disks.read(input, maxBytes, signal, workspace)).data;
           return new Response(data, { headers: {
-            'content-type': 'application/octet-stream', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff',
+            'content-type': converter ? 'application/pdf' : 'application/octet-stream',
+            'cache-control': 'no-store', 'x-content-type-options': 'nosniff',
           } });
         }
         throw new BrowseError('无效的文件操作');

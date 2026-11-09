@@ -11,7 +11,8 @@ async function request(operation, path, signal, workspace, fields) {
     const body = await response.json().catch(() => null);
     throw new Error(body?.error || '本机文件服务不可用（' + response.status + '）');
   }
-  return operation === 'bytes' ? new Uint8Array(await response.arrayBuffer()) : response.json();
+  return operation === 'bytes' || operation === 'office'
+    ? new Uint8Array(await response.arrayBuffer()) : response.json();
 }
 
 export const disks = {
@@ -19,6 +20,7 @@ export const disks = {
   locate: (path, signal, root) => request('locate', path, signal, root),
   read: (path, signal, root) => request('text', path, signal, root),
   readBytes: (path, signal, root) => request('bytes', path, signal, root),
+  renderOffice: (path, signal, root) => request('office', path, signal, root),
   thumbnail: (path, signal, root) => request('thumbnail', path, signal, root),
   stage: (paths, cut, root) => request(cut ? 'cut' : 'copy', fileSelection(paths), undefined, root),
   paste: (path, root) => request('paste', path, undefined, root),
