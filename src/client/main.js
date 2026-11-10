@@ -1,15 +1,16 @@
 import { Explorer, ExplorerTitle } from '../ui/explorer.js';
 import { explorerCss } from '../ui/styles.js';
 import { scrollHorizontally } from '../ui/horizontal-wheel.js';
-import { parentOf, sessionFilePath, underPath, windowsPath } from '../ui/navigation.js';
+import { parentOf, resourceAddress, sessionFilePath, underPath, windowsPath } from '../ui/navigation.js';
 import { renameFavorites } from '../ui/favorites.js';
 import { installSidebarMotion } from './sidebar-motion.js';
-import { installConversationDrop } from './conversation-drop.js';
+import { changedFileButton, installConversationDrop } from './conversation-drop.js';
 
 const id = 'dsh-workspace-explorer';
 const inject = ['slots'];
 const h = react.createElement;
 const instancePrefix = 'dsh-resource://workspace-explorer/tab/';
+const changesReviewPrefix = 'dsh-resource://changes-review/session/';
 
 function apply(ctx) {
   if (location.protocol !== 'dsh-app:' || location.hostname !== 'app') return;
@@ -253,21 +254,22 @@ function apply(ctx) {
       return bindings.get(sidebar.active()?.id) ?? activeView ?? viewList[0];
     }
 
-    async function openConversationFile(request, signal, { view, newTab, paneId }) {
+    async function openConversationFile(request, signal, { view, onUnavailable }) {
       const { address, sessionId, file, params } = request;
       const metadata = await statFile(sessionId, file, signal);
       if (signal.aborted || sidebar.mounted.getSnapshot() !== sessionId) return;
       if (!metadata) {
-        openDocument(address, { params, paneId });
+        if (onUnavailable) onUnavailable();
+        else openDocument(address, { params });
         return;
       }
-      const existing = newTab ? undefined : viewList.includes(view) ? view : currentExplorer();
+      const existing = viewList.includes(view) ? view : currentExplorer();
       const tabId = existing && [...bindings].find(([, item]) => item === existing)?.[0];
       if (tabId) {
         sidebar.focus(tabId);
         if (!sidebar.isExpanded() && !existing.target?.isFloating) sidebar.toggleExpanded();
       }
-      const target = tabId ? existing : openFolderTab(parentOf(metadata.absolute), paneId);
+      const target = tabId ? existing : openFolderTab(parentOf(metadata.absolute));
       if (target) revealFile(target, metadata, params?.line);
     }
 
@@ -275,31 +277,72 @@ function apply(ctx) {
       const openResource = sidebar.openResource;
       let fileClick;
       let dragSource;
+      let openingReview = false;
+      function openFile(request, onUnavailable) {
+        fileClick?.abort();
+        fileClick = new AbortController();
+        void openConversationFile(request, fileClick.signal, { view: currentExplorer(), onUnavailable });
+      }
       function open(address, options) {
+        const changed = dragSource?.changed;
+        if (changed && address.startsWith(changesReviewPrefix)) {
+          if (address.startsWith(changesReviewPrefix + encodeURIComponent(changed.sessionId) + '/')) {
+            dragSource.file = { ...changed, review: { address, params: options?.params } };
+          }
+          return;
+        }
         const request = (!options || Object.keys(options).every(key => key === 'params')) && fileRequest(address, options);
         if (!request) return openResource.call(this, address, options);
         if (dragSource) {
           dragSource.file = request;
           return;
         }
-        fileClick?.abort();
-        fileClick = new AbortController();
-        void openConversationFile(request, fileClick.signal, { view: currentExplorer() });
+        openFile(request);
+      }
+      function changedFileRequest(button) {
+        const card = button.closest('[data-changed-files]');
+        const description = document.getElementById(button.getAttribute('aria-describedby'));
+        const sessionId = card?.closest('[data-conversation-content]')?.dataset.conversationSession;
+        if (sessionId !== sidebar.mounted.getSnapshot() || !card?.contains(description)) return;
+        const absolute = windowsPath(description.textContent);
+        if (absolute) return fileRequest(resourceAddress(absolute, sessionId));
+      }
+      function clickChangedFile(event) {
+        // Shift-click retains the native change review for an individual file.
+        if (openingReview || dragSource?.changed || event.shiftKey || !(event.target instanceof Element)) return;
+        const button = event.target.closest(changedFileButton);
+        const request = button && changedFileRequest(button);
+        if (!request) return;
+        event.preventDefault();
+        event.stopPropagation();
+        openFile(request, () => {
+          if (!button.isConnected) return;
+          openingReview = true;
+          try { button.click(); }
+          finally { openingReview = false; }
+        });
       }
       function readDragSource(button) {
-        // Let Harness resolve the same path and line as a real click, without opening a tab yet.
-        const capture = {};
+        const isChanged = button.matches(changedFileButton);
+        const changed = isChanged ? changedFileRequest(button) : undefined;
+        if (isChanged && !changed) return;
+        // Capture Harness's file or review address without opening the tab until drop.
+        const capture = { changed };
         dragSource = capture;
         try { button.click(); }
         finally { dragSource = undefined; }
-        return capture.file;
+        return capture.file ?? changed;
       }
       sidebar.openResource = open;
-      const stopDrop = installConversationDrop(sidebar.mounted, readDragSource, (request, paneId, signal) => {
-        void openConversationFile(request, signal, { newTab: true, paneId });
+      const stopDrop = installConversationDrop(sidebar.mounted, readDragSource, ({ address, sessionId, params, review }, paneId) => {
+        if (sidebar.mounted.getSnapshot() !== sessionId) return;
+        if (review) sidebar.openResource(review.address, { paneId, params: review.params });
+        else openDocument(address, { paneId, params });
       });
+      document.addEventListener('click', clickChangedFile, true);
       const stop = sidebar.mounted.subscribe(() => fileClick?.abort());
       return () => {
+        document.removeEventListener('click', clickChangedFile, true);
         stopDrop();
         stop();
         fileClick?.abort();

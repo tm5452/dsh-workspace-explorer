@@ -19,7 +19,7 @@ dsh plugin --profile web add dsh-workspace-explorer
 在 Harness 的「插件 → 添加插件」中粘贴下方安装包链接，也可粘贴已下载的本地 `.tgz` 路径：
 
 ```text
-https://github.com/tm5452/dsh-workspace-explorer/releases/download/v1.1.1/dsh-workspace-explorer-1.1.1.tgz
+https://github.com/tm5452/dsh-workspace-explorer/releases/download/v1.1.2/dsh-workspace-explorer-1.1.2.tgz
 ```
 
 已安装早期预览包的用户，先在插件列表移除旧条目，再重新安装。发布变更见 [版本记录](CHANGELOG.md)。
@@ -71,7 +71,7 @@ https://github.com/tm5452/dsh-workspace-explorer/releases/download/v1.1.1/dsh-wo
 | 图片 | PNG、JPG / JPEG、GIF、WebP、BMP、ICO、AVIF | 显示图片 |
 | 视频 | MP4、WebM、M4V、MOV、MKV 等 | 尝试显示首帧，点击播放。取决于 DSH 内置浏览器能否解码 |
 | 音频 | MP3、WAV、OGG、OGA、M4A、AAC、FLAC、Opus | 播放音频，同样取决于解码支持 |
-| 纯文本与代码 | UTF-8 编码的 TXT、MD、JSON、CSV、HTML、脚本等 | 显示原始文本，最多读取前 2 MB |
+| 纯文本与代码 | TXT、MD、JSON、CSV、HTML、PY 等 | 默认按 UTF-8 显示，Python 脚本也可按文件头声明的编码预览。最多读取前 2 MB |
 | 字幕 | SRT、VTT、ASS、SSA | 查看字幕时间和正文，也可切换到原始文本 |
 | 字体 | TTF、OTF、WOFF、WOFF2 | 查看字体样张 |
 | 3D 模型 | STL、OBJ、PLY、GLB、glTF | 旋转、缩放、平移模型，可切换线框。glTF 须内嵌模型数据 |
@@ -86,7 +86,7 @@ https://github.com/tm5452/dsh-workspace-explorer/releases/download/v1.1.1/dsh-wo
 
 ## 在会话与文件之间切换
 
-**打开会话里的文件。** 点击 AI 交付的文件卡片或回复中的本地文件链接，当前文件浏览页会跳到所在文件夹、选中文件并显示预览。把卡片或链接拖到右侧标出的区域，可在新标签页预览。预览栏右上角仍可使用 DSH 原生文档预览。
+**打开会话里的文件。** 点击 AI 交付的文件、改动卡片中的具体文件或回复里的本地文件链接，当前文件浏览页会跳到所在目录、选中文件并展开预览。拖到右侧标出的区域后，交付文件和文件链接打开 DSH 文档预览，改动卡片打开该文件的 DSH 差异审阅；按住 Shift 点击改动文件也可直接查看原生红绿对比。
 
 **拖入文件就是添加附件。** 从列表或大图标视图把文件拖到左侧输入框，文件会加入当前会话的草稿，发送前仍可检查。遇到 DSH 无法接收的文件，可右键「复制文件路径」，再把路径粘贴到对话里。
 

@@ -56,12 +56,30 @@ function fileVersion(info) {
   return JSON.stringify([info.dev, info.ino, info.size, info.mtimeMs, info.ctimeMs]);
 }
 
-function decodePreviewText(data, eof) {
+const pythonEncodingAliases = new Map([
+  ['utf-8-sig', 'utf-8'], ['cp936', 'gbk'], ['cp932', 'shift_jis'],
+  ['cp1252', 'windows-1252'], ['latin-1', 'latin1'], ['iso-8859-1', 'latin1'],
+]);
+
+function pythonSourceEncoding(data) {
+  if (data[0] === 0xef && data[1] === 0xbb && data[2] === 0xbf) return 'utf-8';
+  const [first, second = ''] = data.toString('latin1').split(/\r\n?|\n/, 2);
+  const cookie = /^[ \t\f]*#.*?coding[=:][ \t]*([-_.a-zA-Z0-9]+)/;
+  const declared = cookie.exec(first)?.[1]
+    ?? (/^[ \t\f]*(?:#|$)/.test(first) ? cookie.exec(second)?.[1] : undefined);
+  const label = declared?.toLowerCase().replaceAll('_', '-') ?? 'utf-8';
+  return pythonEncodingAliases.get(label) ?? label;
+}
+
+function decodePreviewText(data, eof, encoding = 'utf-8') {
+  let decoder;
+  try { decoder = new TextDecoder(encoding, { fatal: true }); }
+  catch { decoder = new TextDecoder('utf-8', { fatal: true }); }
   let text;
   try {
-    text = new TextDecoder('utf-8', { fatal: true }).decode(data, { stream: !eof });
+    text = encoding === 'latin1' ? data.toString('latin1') : decoder.decode(data, { stream: !eof });
   } catch {
-    throw new BrowseError('此文件不是 UTF-8 文本');
+    throw new BrowseError(decoder.encoding === 'utf-8' ? '此文件不是 UTF-8 文本' : '无法按文件声明的编码预览');
   }
   if (text.includes('\0')) throw new BrowseError('此格式没有可用的文本预览');
   return text;
@@ -560,8 +578,9 @@ export function registerDesktopFiles(ctx) {
           return json({ url: thumbnailEndpoint + '?ticket=' + token });
         }
         if (operation === 'text') {
-          const { data, eof } = await disks.read(input, maxText, signal, workspace, { sniffText: true });
-          return json({ text: decodePreviewText(data, eof), eof });
+          const python = typeof input === 'string' && /\.py$/i.test(input);
+          const { data, eof } = await disks.read(input, maxText, signal, workspace, { sniffText: !python });
+          return json({ text: decodePreviewText(data, eof, python ? pythonSourceEncoding(data) : undefined), eof });
         }
         if (operation === 'bytes' || operation === 'office') {
           const converter = operation === 'office' ? ctx.officeToPdf : undefined;

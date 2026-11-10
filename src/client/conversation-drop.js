@@ -1,19 +1,18 @@
-const sourceSelector = '[data-presented-file] > button[title], [data-chat-flow] button[class*="_fileMention_"]';
+export const changedFileButton = '[data-changed-files] button[aria-describedby]';
+const sourceSelector = '[data-presented-file] > button[title], [data-chat-flow] button[class*="_fileMention_"], ' + changedFileButton;
 const dragThreshold = 5;
 
-export function installConversationDrop(mounted, readFile, openTab) {
+export function installConversationDrop(mounted, readFile, openPreview) {
   const lifetime = new AbortController();
   const overlay = document.createElement('div');
   overlay.className = 'dwe-conversation-drop';
   overlay.setAttribute('aria-hidden', 'true');
   const area = document.createElement('div');
   area.className = 'dwe-conversation-drop-area';
-  area.textContent = '拖动到这里以新标签页打开';
   const icon = document.createElement('div');
   icon.className = 'dwe-conversation-drag-icon';
   const iconRoot = reactDomClient.createRoot(icon);
   overlay.append(area, icon);
-  let session = new AbortController();
   let gesture;
   let suppressClick = false;
 
@@ -74,6 +73,7 @@ export function installConversationDrop(mounted, readFile, openTab) {
       // Keep tracking even when the chat rerenders the file card during the drag.
       document.body.setPointerCapture(event.pointerId);
       layout();
+      area.textContent = file.review ? '拖到此处在DSH差异审阅中打开' : '拖到此处在DSH文档预览中打开';
       document.body.append(overlay);
       iconRoot.render(react.createElement(primitives.FileTypeIcon, { path: file.file, size: 28 }));
     }
@@ -91,7 +91,7 @@ export function installConversationDrop(mounted, readFile, openTab) {
     if (!shouldOpen) return;
     const hit = document.elementFromPoint(event.clientX, event.clientY);
     const paneId = hit?.closest('[data-sidebar-right-panel] [data-dockkit-pane]')?.dataset.dockkitPane;
-    openTab(file, paneId, session.signal);
+    openPreview(file, paneId);
   }
 
   function cancelPointer(event) {
@@ -112,14 +112,8 @@ export function installConversationDrop(mounted, readFile, openTab) {
     event.stopImmediatePropagation();
   }
 
-  function switchSession() {
-    reset();
-    session.abort();
-    session = new AbortController();
-  }
-
   const options = { capture: true, signal: lifetime.signal };
-  const stop = mounted.subscribe(switchSession);
+  const stop = mounted.subscribe(reset);
   document.addEventListener('pointerdown', arm, options);
   document.addEventListener('pointermove', move, options);
   document.addEventListener('pointerup', release, options);
@@ -136,7 +130,6 @@ export function installConversationDrop(mounted, readFile, openTab) {
     reset();
     iconRoot.unmount();
     stop();
-    session.abort();
     lifetime.abort();
   };
 }
