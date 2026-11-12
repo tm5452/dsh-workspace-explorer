@@ -20,9 +20,15 @@ const maxBytes = 32 * 1024 * 1024;
 const maxFileOperations = 128;
 const invalidComponent = /[<>:"|?*\x00-\x1f]|[. ]$|^(?:CON|PRN|AUX|NUL|CONIN\$|CONOUT\$|COM[0-9¹²³]|LPT[0-9¹²³]) *(?:\.|$)/iu;
 
+// The official desktop shell forks dsh-desktop-host as a child process over IPC.
+// Asar- or single-process packagings (DSH NEXT and similar) run the host in the
+// Electron main process itself, entered through app.asar/lib/host.js, with no IPC
+// channel. The entry path is the only signal both packagings share.
+const desktopHostEntry = /[\\/](?:@deepseek-ai[\\/]dsh-desktop-host[\\/]lib[\\/]index|lib[\\/]host)\.js$/i;
+
 export function isDesktopHost() {
-  return process.platform === 'win32' && Boolean(process.versions.electron) && process.connected === true
-    && /[\\/]@deepseek-ai[\\/]dsh-desktop-host[\\/]lib[\\/]index\.js$/i.test(process.argv[1] ?? '');
+  return process.platform === 'win32' && Boolean(process.versions.electron)
+    && desktopHostEntry.test(process.argv[1] ?? '');
 }
 
 class BrowseError extends Error {
@@ -499,6 +505,31 @@ function json(value, status = 200) {
   return Response.json(value, { status, headers: { 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' } });
 }
 
+const loopbackHosts = /^(?:127\.0\.0\.1|localhost|\[::1\]|::1)$/iu;
+
+// Desktop forwarders treat Fetch-Metadata differently: the official one strips
+// `origin` / `sec-fetch-site` before reaching us, while an asar-packaged host
+// (DSH NEXT and similar) writes back `origin: <loopback listener>` and
+// `sec-fetch-site: same-origin`. Presence alone therefore proves nothing, so we
+// reject only what is demonstrably foreign: a cross-site Fetch-Metadata value, or
+// an origin that is neither the in-app scheme nor a loopback address. Keeping the
+// loopback check matters, because after a DNS rebinding the browser reports the
+// request as same-origin and only the origin reveals the real host.
+function crossSiteRequest(request) {
+  const site = request.headers.get('sec-fetch-site');
+  if (site !== null && site !== 'same-origin' && site !== 'none') return true;
+  const origin = request.headers.get('origin');
+  if (origin === null) return false;
+  try {
+    const url = new URL(origin);
+    if (url.protocol === 'dsh-app:') return false;
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return true;
+    return !loopbackHosts.test(url.hostname);
+  } catch {
+    return true;
+  }
+}
+
 export function registerDesktopFiles(ctx) {
   const disks = createDiskAccess();
   registerPdfAssets(ctx);
@@ -514,12 +545,12 @@ export function registerDesktopFiles(ctx) {
     methods: ['GET', 'HEAD'],
     requestBody: 'buffered',
     async fetch(request) {
-      // Owner admission and Desktop's origin normalization still apply. Media
-      // elements use a short-lived ticket because they cannot set our POST header.
+      // Owner admission still applies, and every request is checked for a real
+      // cross-site origin. Media elements use a short-lived ticket because they
+      // cannot set our POST header.
       const token = new URL(request.url).searchParams.get('ticket');
       const ticket = tickets.get(token);
-      if (request.headers.has('origin') || request.headers.has('sec-fetch-site')
-          || !ticket || ticket.expires <= Date.now()) {
+      if (crossSiteRequest(request) || !ticket || ticket.expires <= Date.now()) {
         return json({ error: '缩略图链接已失效' }, 403);
       }
       try {
@@ -535,10 +566,9 @@ export function registerDesktopFiles(ctx) {
     methods: ['POST'],
     requestBody: 'buffered',
     async fetch(request) {
-      // The desktop forwarder inserts its owned Host cookie and strips browser origin headers.
       // Connection admission has already verified the credential and its owner principal.
-      if (request.headers.has('origin') || request.headers.has('sec-fetch-site')
-          || request.headers.get('x-dsh-workspace-explorer') !== '1') {
+      // What remains is telling a same-local-origin caller from a foreign page.
+      if (crossSiteRequest(request) || request.headers.get('x-dsh-workspace-explorer') !== '1') {
         return json({ error: '本机磁盘接口仅供 Harness 桌面端使用' }, 403);
       }
       if (!request.headers.get('content-type')?.startsWith('application/json')) {

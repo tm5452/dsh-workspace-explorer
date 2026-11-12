@@ -1,5 +1,17 @@
 # 版本记录
 
+## v1.1.4-beta.1 · 兼容打包成 app.asar 的桌面端
+
+### 本机磁盘接口不再只认官方启动方式
+
+- 以前的判断要求宿主进程是官方桌面端 fork 出来的子进程（带 IPC 通道、入口是 `@deepseek-ai/dsh-desktop-host/lib/index.js`）。dsH NEXT 这类把宿主打进 `app.asar` 的版本没有 IPC 通道、入口是 `lib/host.js`，插件因此不注册本机磁盘接口，面板里会看到 404。
+- 现在同时接受两种入口，并仍然要求 Windows + Electron 运行环境；普通网页端和不相干的 Electron 应用不会被误判。跳过注册时会输出一条 debug 日志，日后再遇到类似问题能直接看出是「没注册」还是「请求被拒绝」。
+
+### 请求来源校验改为只拦真正的跨站
+
+- 打包版的转发层会把浏览器的 `origin` 和 `sec-fetch-site` 原样写回请求，旧代码一看到这两个头就返回 403（`本机磁盘接口仅供 Harness 桌面端使用`），所以即使接口注册上了也打不开。
+- 现在拒绝的是：`sec-fetch-site` 为 `cross-site` / `same-site`、`origin` 既不是应用内协议也不是回环地址的请求。一次性缩略图票据、自定义请求头、`cross-origin-resource-policy: same-origin` 全部保留，DNS 重绑定也仍然拦得住。
+
 ## v1.1.3 · 路径引用与 Better Sidebar 适配
 
 ### 文件和文件夹可以作为位置引用拖进会话
