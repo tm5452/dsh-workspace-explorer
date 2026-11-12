@@ -1,5 +1,16 @@
 # 版本记录
 
+## v1.1.4-beta.2 · 修好在 desktop 0.2.2-rc.2 上的注册失败
+
+### `ctx.inject` 的对象形态在 cordis 4 里是全必填
+
+- 旧代码写的是 `ctx.inject({ connection: true, officeToPdf: { required: false } }, …)`，本意是「等 connection，officeToPdf 可选」。cordis 4 把对象形态当成「服务名 → 拦截配置」，每个键都算必需服务；desktop 0.2.2-rc.2 起没有插件提供 `officeToPdf`，于是回调永远等不到，路由一条都没注册，面板请求 404。
+- 现在只 inject 真正必需的 `connection`，`officeToPdf` 改成用时再取（`ctx.get()`，取不到就让 Office 预览返回原来的 503 提示）。
+
+### 直接读可选服务会抛错
+
+- cordis 4 不允许读没有 inject 的服务（`cannot get property "officeToPdf" without inject`），`src/host/files.js` 里那处直接属性访问会连带把整条路由打成 500。已改为 `ctx.get('officeToPdf')` 并兜住异常，两种 cordis 版本都能跑。
+
 ## v1.1.4-beta.1 · 兼容打包成 app.asar 的桌面端
 
 ### 本机磁盘接口不再只认官方启动方式

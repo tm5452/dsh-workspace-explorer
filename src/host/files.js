@@ -622,7 +622,7 @@ export function registerDesktopFiles(ctx) {
           return json({ text: decodePreviewText(data, eof, python ? pythonSourceEncoding(data) : undefined), eof });
         }
         if (operation === 'bytes' || operation === 'office') {
-          const converter = operation === 'office' ? ctx.officeToPdf : undefined;
+          const converter = operation === 'office' ? officeConverter(ctx) : undefined;
           if (operation === 'office' && !converter) return json({ error: '当前 DSH 未提供 Office 转换服务' }, 503);
           const data = converter
             ? await disks.renderOffice(input, signal, workspace, converter)
@@ -645,6 +645,18 @@ function browseFailure(error) {
   if (error instanceof BrowseError) return json({ error: error.message }, error.status);
   const [message, status] = knownErrors[error?.code] ?? ['无法读取该位置', 500];
   return json({ error: message }, status);
+}
+
+// officeToPdf 是可选服务：cordis 4 里读一个没有 inject 的服务会直接抛
+// "cannot get property ... without inject"，所以统一走 ctx.get()，
+// 拿不到就交给上面的 503 分支，别让整条路由 500。
+function officeConverter(ctx) {
+  try {
+    if (typeof ctx.get === 'function') return ctx.get('officeToPdf');
+    return ctx.officeToPdf;
+  } catch {
+    return undefined;
+  }
 }
 
 
