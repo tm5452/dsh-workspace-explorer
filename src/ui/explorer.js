@@ -6,7 +6,7 @@ import { Thumbnail } from './thumbnail.js';
 import { DeleteDialog, FileMenu, RenameDialog } from './file-menu.js';
 import { Favorites, toggleFavorite, useFavorites } from './favorites.js';
 
-const { createElement: h, useEffect, useLayoutEffect, useRef, useState, useCallback } = react;
+const { createElement: h, useEffect, useLayoutEffect, useRef, useState, useCallback, useSyncExternalStore } = react;
 const collator = new Intl.Collator('zh-CN', { numeric: true, sensitivity: 'base' });
 const icons = {
   back: 'M19 12H5m7-7-7 7 7 7',
@@ -20,6 +20,7 @@ const icons = {
   close: 'm6 6 12 12M18 6 6 18',
   external: 'M14 4h6v6m0-6-9 9m7-1v7H5V6h7',
   chevron: 'm9 6 6 6-6 6',
+  recent: 'M15 11a6 6 0 1 1-12 0 6 6 0 0 1 12 0Zm-6-3v3l2 2m8-8v13m-3-3 3 3 3-3',
   list: 'M9 6h11M9 12h11M9 18h11M4 6h1M4 12h1M4 18h1',
   grid: 'M4 4h6v6H4zm10 0h6v6h-6zM4 14h6v6H4zm10 0h6v6h-6z',
   preview: 'M3 4h18v16H3zM3 13h18',
@@ -54,6 +55,12 @@ function tool(name, label, onClick, disabled = false, pressed) {
 
 function compareEntries(a, b) {
   return Number(b.type === 'directory') - Number(a.type === 'directory') || collator.compare(a.name, b.name);
+}
+
+function compareModified(a, b) {
+  const first = a.modifiedAt ?? -Infinity;
+  const second = b.modifiedAt ?? -Infinity;
+  return first === second ? 0 : second - first;
 }
 
 function canModify(entry) {
@@ -124,16 +131,43 @@ function readViewMode(key) {
   try { return localStorage.getItem(key) === 'grid' ? 'grid' : 'list'; } catch { return 'list'; }
 }
 
+const sortListeners = new Set();
+const temporarySortModes = new Map();
+
+function subscribeSortMode(listener) {
+  sortListeners.add(listener);
+  window.addEventListener('storage', listener);
+  return () => {
+    sortListeners.delete(listener);
+    window.removeEventListener('storage', listener);
+  };
+}
+
+function readSortMode(key) {
+  if (!key) return false;
+  if (temporarySortModes.has(key)) return temporarySortModes.get(key);
+  try { return localStorage.getItem(key) === 'modified'; } catch { return false; }
+}
+
+function changeSortMode(key, byModified) {
+  try {
+    if (byModified) localStorage.setItem(key, 'modified');
+    else localStorage.removeItem(key);
+    temporarySortModes.delete(key);
+  } catch {
+    temporarySortModes.set(key, byModified);
+  }
+  for (const listener of sortListeners) listener();
+}
+
 const splitMin = 0.16;
 const splitMax = 0.86;
 const clampSplit = ratio => Math.min(splitMax, Math.max(splitMin, ratio));
 
 function PreviewDivider({ root, ratio, setRatio }) {
   const grabOffset = useRef(0);
-  const [dragging, setDragging] = useState(false);
   return h('div', {
     className: 'dwe-divider', role: 'separator', tabIndex: 0,
-    'data-dragging': dragging || undefined,
     'aria-label': '调整文件预览分栏高度', 'aria-orientation': 'horizontal',
     'aria-valuemin': splitMin * 100, 'aria-valuemax': splitMax * 100,
     'aria-valuenow': Math.round(ratio * 100),
@@ -143,11 +177,8 @@ function PreviewDivider({ root, ratio, setRatio }) {
       const divider = event.currentTarget;
       const bounds = divider.getBoundingClientRect();
       grabOffset.current = event.clientY - (bounds.top + bounds.height / 2);
-      divider.focus();
       divider.setPointerCapture(event.pointerId);
     },
-    onGotPointerCapture: () => setDragging(true),
-    onLostPointerCapture: () => setDragging(false),
     onPointerMove: event => {
       const divider = event.currentTarget;
       if (!divider.hasPointerCapture(event.pointerId)) return;
@@ -168,10 +199,10 @@ function PreviewDivider({ root, ratio, setRatio }) {
 
 export function Explorer({
   cwd, sessionId, initialPath, bindFileActions, getTarget, onPath, openLocal, openDocument, openFolderTab,
-  refreshDirectories, updateRenamedPath,
+  refreshDirectories, updateRenamedPath, getInput,
 }) {
   const workspace = windowsPath(cwd);
-  const [localHistory, setLocalHistory] = useState(() => firstPath(initialPath ?? workspace));
+  const [localHistory, setLocalHistory] = useState(() => firstPath(initialPath === undefined ? workspace : initialPath));
   const [scoped, setScoped] = useState(null);
   const workspaceMode = scoped !== null;
   const root = scoped?.root ?? null;
@@ -198,8 +229,11 @@ export function Explorer({
   const favorites = useFavorites();
   const favoritesButton = useRef(null);
   const closeFavorites = useCallback(() => setFavoritesOpen(false), []);
-  const startDrag = useComposerDrop(sessionId, openFolderTab, setActionError, root);
-  const dragFolder = (event, path) => startDrag(event, path, '', true);
+  const dismissMenu = useCallback(() => setMenu(null), []);
+  const { startDrag, startRightDrag, send: sendToComposer } = useComposerDrop(
+    sessionId, openFolderTab, setActionError, root, dismissMenu, getInput,
+  );
+  const dragFolder = (event, path) => startDrag(event, [{ path, folder: true }], path);
   const [locating, setLocating] = useState(false);
   const [viewModes, setViewModes] = useState(() => new Map());
   const scroll = useRef(null);
@@ -215,11 +249,26 @@ export function Explorer({
   const viewKey = 'dsh-workspace-explorer.view:' + (path ?? 'home');
   const savedMode = react.useMemo(() => readViewMode(viewKey), [viewKey]);
   const grid = (viewModes.get(viewKey) ?? savedMode) === 'grid';
+  const sortKey = path ? 'dsh-workspace-explorer.sort:' + path.toLowerCase() : null;
+  const sortByModified = useSyncExternalStore(subscribeSortMode, () => readSortMode(sortKey));
   const ready = listing?.path === path && listing.root === root && listing.revision === revision ? listing : null;
-  const found = searchResult?.root === root && searchResult.term === term && searchResult.revision === revision
+  const entries = react.useMemo(() => [...(ready?.entries ?? [])].sort((a, b) =>
+    (sortByModified ? compareModified(a, b) : 0) || compareEntries(a, b)), [ready, sortByModified]);
+  const searchReady = searchResult?.root === root && searchResult.term === term && searchResult.revision === revision
     ? searchResult : null;
+  const found = react.useMemo(() => searchReady?.matches ? {
+    ...searchReady,
+    matches: [...searchReady.matches].sort((a, b) =>
+      (sortByModified ? compareModified(a, b) : 0) || collator.compare(a.name, b.name) || collator.compare(a.relative, b.relative)),
+  } : searchReady, [searchReady, sortByModified]);
   const shownPreview = preview && (!workspaceMode || underPath(preview.absolute, root)) ? preview : null;
-  const selectedEntries = !term && ready?.entries ? ready.entries.filter(entry => selection.names.has(entry.name)) : [];
+  const selectedEntries = term ? [] : entries.filter(entry => selection.names.has(entry.name));
+  const composerItems = entries => entries.map(entry => ({
+    name: entry.name, path: entry.path ?? joinPath(path, entry.name), folder: entry.type !== 'file',
+  }));
+  function dragEntries(entry) {
+    return !term && selection.names.has(entry.name) ? selectedEntries : [entry];
+  }
   const modifySelected = selectedEntries.length > 0 && selectedEntries.every(canModify) && !working;
   const refresh = useCallback(() => setRevision(value => value + 1), []);
   const rename = useCallback((from, to) => {
@@ -292,7 +341,7 @@ export function Explorer({
     const controller = new AbortController();
     const signal = controller.signal;
     disks.list(path, signal, root).then(({ entries, truncated }) => {
-      if (!signal.aborted) setListing({ path, root, revision, entries: entries.sort(compareEntries), truncated });
+      if (!signal.aborted) setListing({ path, root, revision, entries, truncated });
     }).catch(error => {
       if (!signal.aborted) setListing({ path, root, revision, error: error.message });
     });
@@ -305,8 +354,7 @@ export function Explorer({
     const signal = controller.signal;
     const timer = setTimeout(() => {
       disks.search(root, term, signal).then(result => {
-        if (!signal.aborted) setSearchResult({ ...result, root, term, revision,
-          matches: result.matches.sort((a, b) => collator.compare(a.name, b.name) || collator.compare(a.relative, b.relative)) });
+        if (!signal.aborted) setSearchResult({ ...result, root, term, revision });
       }).catch(error => {
         if (!signal.aborted) setSearchResult({ root, term, revision, error: error.message });
       });
@@ -370,7 +418,6 @@ export function Explorer({
 
   function select(event, entry) {
     const { shiftKey, ctrlKey } = event;
-    const entries = ready?.entries ?? [];
     setSelection(current => selectNames(current, entry.name, entries, shiftKey, ctrlKey));
     setActionError('');
     setActionNotice('');
@@ -397,7 +444,7 @@ export function Explorer({
     event.preventDefault();
     event.stopPropagation();
     const absolute = entry && (entry.path ?? joinPath(path, entry.name));
-    const keepSelection = entry && selection.names.has(entry.name);
+    const keepSelection = entry && !term && selection.names.has(entry.name);
     if (entry && !keepSelection) setSelection(singleSelection(entry.name));
     setMenu({ entry, absolute, entries: keepSelection ? selectedEntries : entry ? [entry] : [], x: event.clientX, y: event.clientY,
       focus: event.target.closest?.('.dwe-row') ?? scroll.current });
@@ -407,6 +454,11 @@ export function Explorer({
   const pasteTarget = folderTarget ? menu.absolute : path;
   const mutable = menu?.entries.length > 0 && menu.entries.every(canModify);
   const oneEntry = menu?.entries.length === 1;
+  const conversationActions = menu?.entry ? [
+    { id: 'composer-path', label: '引用路径文本到对话框', icon: icon('path'), disabled: !menu.absolute },
+    { id: 'composer-attach', label: '复制文件到对话框', icon: icon('copy'),
+      disabled: !menu.entries.length || !menu.entries.every(entry => entry.type === 'file') },
+  ] : [];
   const actions = menu?.entry ? [
     { id: 'copy', label: '复制', icon: icon('copy'), disabled: !mutable || working },
     { id: 'cut', label: '剪切', icon: icon('cut'), disabled: !mutable || working },
@@ -418,6 +470,11 @@ export function Explorer({
   ] : [{ id: 'paste', label: '粘贴', icon: icon('paste'), disabled: !pasteTarget || working }];
 
   function runMenuAction(action) {
+    if (action === 'composer-path' || action === 'composer-attach') {
+      closeMenu();
+      void sendToComposer(composerItems(menu.entries), action === 'composer-attach' ? 'attachment' : 'text');
+      return;
+    }
     closeMenu(action !== 'rename');
     void runAction(action, menu.entries, pasteTarget);
   }
@@ -619,13 +676,17 @@ export function Explorer({
         onContextMenu: event => showMenu(event) },
         !term && !grid && h('div', { className: 'dwe-columns dwe-head', 'aria-hidden': true },
           h('span', null, '名称'), h('span', null, '类型'), h('span', null, '大小')),
-        term ? h(SearchResults, { found, select: openSearchHit })
+        term ? h(SearchResults, { found, select: openSearchHit, canDrag: Boolean(sessionId),
+          contextMenu: (event, match) => showMenu(event, { ...match, type: 'file' }),
+          drag: (event, match) => startDrag(event, [match]),
+          rightDrag: (event, match) => startRightDrag(event, [match]),
+        })
           : workspaceMode && !root ? h('p', { className: 'dwe-message' }, '当前会话没有可浏览的本机工作区。')
           : !ready ? h('p', { className: 'dwe-message', role: 'status' }, '正在读取…')
           : ready.error ? h('p', { className: 'dwe-message dwe-error', role: 'alert' }, ready.error)
           : ready.entries.length === 0 ? h('p', { className: 'dwe-message' }, path ? '此文件夹为空' : '没有可用的本机磁盘')
           : h('ul', { className: grid ? 'dwe-entries dwe-grid' : 'dwe-entries' },
-              ready.entries.map(entry => h('li', { key: entry.name, onContextMenu: event => showMenu(event, entry) },
+              entries.map(entry => h('li', { key: entry.name, onContextMenu: event => showMenu(event, entry) },
                 h('button', {
                   type: 'button', className: grid ? 'dwe-row dwe-tile' : 'dwe-columns dwe-row', title: entry.name,
                   'aria-pressed': selection.names.has(entry.name),
@@ -633,8 +694,12 @@ export function Explorer({
                   draggable: entry.type !== 'other' && Boolean(sessionId),
                   onDragStart: event => {
                     const absolute = entry.path ?? joinPath(path, entry.name);
-                    if (entry.type === 'file') startDrag(event, absolute, entry.name);
-                    else dragFolder(event, absolute);
+                    startDrag(event, composerItems(dragEntries(entry)), entry.type === 'file' ? undefined : absolute);
+                  },
+                  onPointerDown: event => {
+                    if (entry.type !== 'file' || event.button !== 2) return;
+                    const entries = dragEntries(entry);
+                    if (entries.every(item => item.type === 'file')) startRightDrag(event, composerItems(entries));
                   },
                   onClick: event => select(event, entry),
                   onDoubleClick: event => { if (!event.ctrlKey && !event.shiftKey) activate(entry); },
@@ -650,14 +715,16 @@ export function Explorer({
                 !grid && h('span', { className: 'dwe-meta' }, entryType(entry)),
                 !grid && h('span', { className: 'dwe-meta' }, formatSize(entry.size))))))),
       h('footer', { className: 'dwe-status-bar' },
-        h('div', { className: 'dwe-nav', role: 'group', 'aria-label': '文件视图' },
-          tool('list', '列表', () => changeView('list'), false, !grid),
-          tool('grid', '大图标', () => changeView('grid'), false, grid)),
-        h('span', { className: 'dwe-v-divider', 'aria-hidden': true }),
         h('span', { className: 'dwe-status', role: 'status', title: actionNotice },
           term ? found?.matches ? found.matches.length + ' 个结果' + (found.truncated ? ' · 请缩小关键词' : '') : ' '
             : actionNotice || (selectedEntries.length > 1 ? '已选择 ' + selectedEntries.length + ' 项'
               : ready?.entries ? ready.entries.length + ' 个项目' + (ready.truncated ? ' · 列表已截断' : '') : ' ')),
+        tool('recent', '按修改时间排序', () => changeSortMode(sortKey, !readSortMode(sortKey)), !path, sortByModified),
+        h('span', { className: 'dwe-v-divider', 'aria-hidden': true }),
+        h('div', { className: 'dwe-nav', role: 'group', 'aria-label': '文件视图' },
+          tool('list', '列表', () => changeView('list'), false, !grid),
+          tool('grid', '大图标', () => changeView('grid'), false, grid)),
+        h('span', { className: 'dwe-v-divider', 'aria-hidden': true }),
         tool('preview', '预览窗格', () => setPreviewOpen(open => !open), false, previewOpen))),
     previewOpen && h(PreviewDivider, { root: layout, ratio: splitRatio, setRatio: setSplitRatio }),
     previewOpen && h('section', { className: 'dwe-preview', 'aria-label': '文件预览' },
@@ -671,22 +738,27 @@ export function Explorer({
       h('div', { className: 'dwe-preview-body' },
         shownPreview ? h(PreviewBoundary, { key: JSON.stringify([shownPreview.absolute, root]) }, h(Preview, { file: shownPreview, root }))
           : h('p', { className: 'dwe-preview-hint' }, '单击一个文件进行预览'))),
-    sessionId && menu && h(FileMenu, { menu, items: actions, close: closeMenu, invoke: runMenuAction }),
+    sessionId && menu && h(FileMenu, { menu, close: closeMenu, invoke: runMenuAction, groups: [
+      { label: '对话框操作', items: conversationActions },
+      { label: '文件管理', items: actions },
+    ] }),
     sessionId && renaming && h(RenameDialog, { entry: renaming, close: () => setRenaming(null), rename: renameEntry }),
     sessionId && deleting && h(DeleteDialog, { entries: deleting, close: () => setDeleting(null), remove: deleteEntry }),
   );
 }
 
-function SearchResults({ found, select }) {
+function SearchResults({ found, select, canDrag, contextMenu, drag, rightDrag }) {
   if (!found) return h('p', { className: 'dwe-message', role: 'status' }, '正在搜索工作区…');
   if (found.error) return h('p', { className: 'dwe-message dwe-error', role: 'alert' }, found.error);
   return h(react.Fragment, null,
     found.skipped > 0 && h('p', { className: 'dwe-message', role: 'status' }, '已跳过无法读取的子文件夹。'),
     found.matches.length === 0 ? h('p', { className: 'dwe-message' }, '未找到匹配的文件。')
       : h('ul', { className: 'dwe-entries', 'aria-label': '工作区搜索结果' },
-        ...found.matches.map(match => h('li', { key: match.path },
+        ...found.matches.map(match => h('li', { key: match.path, onContextMenu: event => contextMenu(event, match) },
           h('button', {
             type: 'button', className: 'dwe-row dwe-search-hit', title: match.path, onClick: () => select(match),
+            draggable: canDrag, onDragStart: event => drag(event, match),
+            onPointerDown: event => rightDrag(event, match),
           }, fileIcon(match.name, 'file'),
           h('span', null, h('span', null, match.name),
             h('small', null, match.relative.slice(0, -(match.name.length + 1)) || '工作区根目录')))))));

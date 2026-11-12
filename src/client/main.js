@@ -3,19 +3,55 @@ import { explorerCss } from '../ui/styles.js';
 import { scrollHorizontally } from '../ui/horizontal-wheel.js';
 import { parentOf, resourceAddress, sessionFilePath, underPath, windowsPath } from '../ui/navigation.js';
 import { renameFavorites } from '../ui/favorites.js';
+import { installDesktopPathDrop } from '../ui/composer-drop.js';
 import { installSidebarMotion } from './sidebar-motion.js';
+import { cardIconMarkup, cardIconRatio, cardIconViewBox } from '../ui/card-icon.js';
+import { myPcIconMarkup, myPcIconRatio, myPcIconViewBox } from '../ui/my-pc-icon.js';
+
 import { changedFileButton, installConversationDrop } from './conversation-drop.js';
 
 const id = 'dsh-workspace-explorer';
+// The kind our pages are drawn into. DSH's tab registry lets exactly one `extension`
+// hold a kind (two in the same band is a wiring mistake and throws), and `files` is
+// the kind every files provider wants: claiming it here used to make a second files
+// provider register dsh-better-sidebar's `tab kind "files" is already registered
+// (extension)`. Our kind is ours alone, so nothing can collide, and the tree, the
+// preview and every interaction are identical either way.
+const OWN_KIND = 'dsh-workspace-explorer';
 const inject = ['slots'];
 const h = react.createElement;
 const instancePrefix = 'dsh-resource://workspace-explorer/tab/';
+const computerPrefix = instancePrefix + 'computer/';
 const changesReviewPrefix = 'dsh-resource://changes-review/session/';
+
+/**
+ * The guide card's 标志. Guide entries take an icon *component* (`entry.icon` is rendered as
+ * `<Icon size={…} />`), so a picture has to arrive as a component too.
+ *
+ * It is drawn as an inline <svg> rather than an <img>: the vector is rasterised at the 26px it is
+ * actually shown at, while a bitmap would be decoded at its own resolution (~167 KiB for the old
+ * 233x183 PNG) and only then scaled down to 26. The markup is inlined by
+ * scripts/make-card-icon.mjs because the bundle cannot serve files at runtime.
+ */
+function CardIcon({ size = 26, className, computer = false }) {
+  return h('svg', {
+    className,
+    viewBox: computer ? myPcIconViewBox : cardIconViewBox,
+    width: Math.round(size * (computer ? myPcIconRatio : cardIconRatio) * 100) / 100,
+    height: size,
+    role: 'img',
+    'aria-hidden': 'true',
+    focusable: 'false',
+    style: { display: 'block' },
+    dangerouslySetInnerHTML: { __html: computer ? myPcIconMarkup : cardIconMarkup },
+  });
+}
+
 
 function apply(ctx) {
   if (location.protocol !== 'dsh-app:' || location.hostname !== 'app') return;
   if (!navigator.platform.startsWith('Win')) return;
-  ctx.inject(['sidebarRightTabs', 'sidebarRight', 'remote', 'remote.session', 'remote.workspaceFiles'], (scope) => {
+  ctx.inject(['sidebarRightTabs', 'sidebarRight', 'remote', 'remote.session', 'remote.workspaceFiles', 'conversation', 'sessions'], (scope) => {
     const sidebar = scope.sidebarRight;
     const bindings = new Map();
     const folderTabs = new Map();
@@ -31,6 +67,12 @@ function apply(ctx) {
     let captureQueued = false;
     let handoffFrame;
     let handoffAnimation;
+    const tabKind = OWN_KIND;
+
+    function getInput(sessionId) {
+      const session = scope.get('sessions').scope(sessionId);
+      return session && scope.get('conversation').input.for(session);
+    }
 
     function subscribe(listener) {
       listeners.add(listener);
@@ -42,13 +84,14 @@ function apply(ctx) {
     }
 
     function filesIn(sessionId) {
-      return sidebar.openTabs.getSnapshot().filter(tab => tab.sessionId === sessionId && tab.kind === 'files');
+      return sidebar.openTabs.getSnapshot().filter(tab => tab.sessionId === sessionId && tab.kind === tabKind);
     }
 
     function createView(initialPath) {
       const host = document.createElement('div');
       host.className = 'dwe-host';
-      const view = { host, address: instancePrefix + crypto.randomUUID(), path: initialPath ?? null, initialPath };
+      const address = (initialPath === null ? computerPrefix : instancePrefix) + crypto.randomUUID();
+      const view = { host, address, path: initialPath ?? null, initialPath };
       view.getTarget = () => view.target;
       view.onPath = path => {
         if (view.path === path) return;
@@ -118,7 +161,7 @@ function apply(ctx) {
       }
       for (const tab of tabs) {
         if (bindings.has(tab.tabId)) continue;
-        const view = createView(folderTabs.get(tab.contentId) ?? workspace);
+        const view = createView(tab.contentId?.startsWith(computerPrefix) ? null : folderTabs.get(tab.contentId) ?? workspace);
         bindings.set(tab.tabId, view);
         added.push(view);
       }
@@ -171,13 +214,13 @@ function apply(ctx) {
     }
 
     function placeView(view, options) {
-      sidebar.openResource(view.address, { kind: 'files', ...options });
+      sidebar.openResource(view.address, { kind: tabKind, ...options });
       const tab = sidebar.active();
-      if (tab?.kind === 'files' && tab.contentId === view.address) bindings.set(tab.id, view);
+      if (tab?.kind === tabKind && tab.contentId === view.address) bindings.set(tab.id, view);
     }
 
     function present(sessionId, cwd) {
-      workspace = windowsPath(cwd);
+      workspace = windowsPath(cwd) ?? undefined;
       if (sessionId !== presentedSession || detached) {
         const first = !presentedSession;
         presentedSession = sessionId;
@@ -194,7 +237,7 @@ function apply(ctx) {
             const replaceTab = fileFocused && sidebar.active()?.kind === 'guide' ? sidebar.active()?.id : undefined;
             viewList.forEach((view, index) => placeView(view, index === 0 ? { replaceTab } : undefined));
             if (viewList.length) {
-              const restoreTab = !fileFocused && nativeActive?.kind !== 'files' ? nativeActive?.id
+              const restoreTab = !fileFocused && nativeActive?.kind !== tabKind ? nativeActive?.id
                 : [...bindings].find(([, view]) => view === activeView)?.[0];
               if (restoreTab) sidebar.focus(restoreTab);
               if (preserveExpansion !== undefined && sidebar.isExpanded() !== preserveExpansion) sidebar.toggleExpanded();
@@ -221,7 +264,7 @@ function apply(ctx) {
       const address = instancePrefix + crypto.randomUUID();
       folderTabs.set(address, path);
       try {
-        sidebar.openResource(address, { kind: 'files', paneId });
+        sidebar.openResource(address, { kind: tabKind, paneId });
         syncTabs();
         const tab = sidebar.active();
         return tab?.contentId === address ? bindings.get(tab.id) : undefined;
@@ -429,8 +472,29 @@ function apply(ctx) {
       const sessionId = target?.sessionId;
       return reactDom.createPortal(h(Explorer, {
         sessionId, cwd, initialPath: view.initialPath, getTarget: view.getTarget, bindFileActions: view.bindFileActions,
-        onPath: view.onPath, openLocal, openDocument, openFolderTab, refreshDirectories, updateRenamedPath,
+        onPath: view.onPath, openLocal, openDocument, openFolderTab, refreshDirectories, updateRenamedPath, getInput,
       }), view.host);
+    }
+
+    function ExplorerGuide({ kind, title, description, useTabInfo }) {
+      const { tab, panel } = useTabInfo();
+      return h('div', { className: 'dwe-guide-entry', 'data-sidebar-right-guide-entry': kind },
+        h('button', { type: 'button', className: 'dwe-guide-main',
+          onClick: () => {
+            tab.actions.openTab(tabKind, { replaceTab: true });
+            tab.actions.close();
+          },
+        },
+        h(CardIcon, { size: description === undefined ? 22 : 26 }),
+        h('span', { className: 'dwe-guide-copy' },
+          h('span', { className: 'dwe-guide-title' }, title),
+          description !== undefined && h('span', { className: 'dwe-guide-description' }, description))),
+        h('button', { type: 'button', className: 'dwe-guide-computer', title: '打开此电脑',
+          'aria-label': '打开此电脑',
+          onClick: () => sidebar.openResource(computerPrefix + crypto.randomUUID(), {
+            kind: tabKind, paneId: panel.id, replaceTab: tab.id,
+          }),
+        }, h(CardIcon, { computer: true })));
     }
 
     function Keeper({ useSessions }) {
@@ -459,11 +523,13 @@ function apply(ctx) {
       }
       document.addEventListener('wheel', wheel, { passive: false, capture: true });
       const disposeFileOpener = installFileOpener();
+      const disposeDesktopPathDrop = installDesktopPathDrop(sidebar.mounted, getInput);
       const disposeMotion = installSidebarMotion(sidebar);
       const disposeTabs = sidebar.openTabs.subscribe(syncTabs);
       const disposeSwitch = sidebar.mounted.subscribe(closeDepartingTabs);
       return () => {
         disposeFileOpener();
+        disposeDesktopPathDrop();
         disposeMotion();
         disposeTabs();
         disposeSwitch();
@@ -477,18 +543,34 @@ function apply(ctx) {
       ['shell.overlay', undefined, Keeper],
       ['sidebar.right.pane.tab', id, Anchor],
       ['sidebar.right.pane.tab.title', id, Title],
+      ['sidebar.right.tab.guide.entry', id, ExplorerGuide],
     ]) {
       scope.effect(() => scope.slots.inject(name, () =>
         scope.slots.register(key ? { name, key } : { name, id }, component)));
     }
-    scope.effect(() => scope.sidebarRightTabs.register({
-      id, kind: 'files', priority: 'extension', title: () => '文件浏览', multiple: true,
-      guide: [{
-        id: 'workspace', commandId: 'workspace.files', order: 10, title: () => '文件浏览',
-        description: () => '浏览本机磁盘，在下方独立预览文件',
-        icon: primitives.GuideArtworkFiles,
-      }],
-    }));
+    // We hold our own kind and never claim `files`. A sibling sidebar plugin takes `files`
+    // over for its own tree, and two providers racing for one kind makes whichever loses
+    // log a registration error — so the `files` row is left to that plugin (or to the
+    // built-in page when it steps aside), and file clicks still land on our page through
+    // installFileOpener(), which patches the host's openResource whatever kind is in front.
+    scope.effect(() => {
+      // The tab strip and the guide row both read 电脑文件资源管理器.
+      const label = () => '电脑文件资源管理器';
+      const dispose = scope.sidebarRightTabs.register({
+        id, kind: OWN_KIND, priority: 'extension', multiple: true, title: label,
+        guide: [{
+          // Guide entries sort by this number alone (registry `guide()` sorts `left.order - right.order`),
+          // so a large negative value puts ours first whether or not a sibling sidebar plugin
+          // contributes cards of its own.
+          id: 'workspace', commandId: 'workspace.files', order: -1000000,
+          title: label,
+          description: () => '浏览本机磁盘，在下方独立预览文件',
+          icon: CardIcon,
+        }],
+      });
+      syncTabs();
+      return () => dispose();
+    });
   });
 }
 

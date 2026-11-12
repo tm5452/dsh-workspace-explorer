@@ -1,12 +1,13 @@
 const { createElement: h, useEffect, useLayoutEffect, useRef, useState } = react;
 
-export function FileMenu({ menu, items, close, invoke }) {
+export function FileMenu({ menu, groups, close, invoke }) {
   const root = useRef(null);
   useLayoutEffect(() => {
     const node = root.current;
     const bounds = node.getBoundingClientRect();
+    const rowHeight = node.querySelector('button')?.offsetHeight ?? 0;
     node.style.left = Math.max(4, Math.min(menu.x, window.innerWidth - bounds.width - 4)) + 'px';
-    node.style.top = Math.max(4, Math.min(menu.y, window.innerHeight - bounds.height - 4)) + 'px';
+    node.style.top = Math.max(4, Math.min(menu.y + rowHeight / 2, window.innerHeight - bounds.height - 4)) + 'px';
     node.querySelector('button:not(:disabled)')?.focus({ preventScroll: true });
   }, [menu]);
 
@@ -43,10 +44,12 @@ export function FileMenu({ menu, items, close, invoke }) {
       event.preventDefault();
       event.stopPropagation();
     },
-  }, ...items.map(item => h('button', {
-    type: 'button', role: 'menuitem', key: item.id, disabled: item.disabled, 'data-dwe-action': item.id,
-    onClick: () => invoke(item.id),
-  }, item.icon, item.label))), document.body);
+  }, ...groups.filter(group => group.items.length).map(({ label, items }) =>
+    h('div', { className: 'dwe-file-menu-panel', key: label, role: 'group', 'aria-label': label },
+      ...items.map(item => h('button', {
+        type: 'button', role: 'menuitem', key: item.id, disabled: item.disabled, 'data-dwe-action': item.id,
+        onClick: () => invoke(item.id),
+      }, item.icon, item.label))))), document.body);
 }
 
 export function DeleteDialog({ entries, close, remove }) {

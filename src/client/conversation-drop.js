@@ -1,3 +1,5 @@
+import { createDragIcon } from '../ui/drag-icon.js';
+
 export const changedFileButton = '[data-changed-files] button[aria-describedby]';
 const sourceSelector = '[data-presented-file] > button[title], [data-chat-flow] button[class*="_fileMention_"], ' + changedFileButton;
 const dragThreshold = 5;
@@ -9,10 +11,8 @@ export function installConversationDrop(mounted, readFile, openPreview) {
   overlay.setAttribute('aria-hidden', 'true');
   const area = document.createElement('div');
   area.className = 'dwe-conversation-drop-area';
-  const icon = document.createElement('div');
-  icon.className = 'dwe-conversation-drag-icon';
-  const iconRoot = reactDomClient.createRoot(icon);
-  overlay.append(area, icon);
+  const icon = createDragIcon();
+  overlay.append(area, icon.element);
   let gesture;
   let suppressClick = false;
 
@@ -24,7 +24,6 @@ export function installConversationDrop(mounted, readFile, openPreview) {
     }
     overlay.remove();
     overlay.removeAttribute('data-dwe-drop-active');
-    if (previous?.file) iconRoot.render(null);
   }
 
   function arm(event) {
@@ -75,11 +74,10 @@ export function installConversationDrop(mounted, readFile, openPreview) {
       layout();
       area.textContent = file.review ? '拖到此处在DSH差异审阅中打开' : '拖到此处在DSH文档预览中打开';
       document.body.append(overlay);
-      iconRoot.render(react.createElement(primitives.FileTypeIcon, { path: file.file, size: 28 }));
+      icon.show(file.file);
     }
     event.preventDefault();
-    icon.style.setProperty('--dwe-drag-x', event.clientX + 12 + 'px');
-    icon.style.setProperty('--dwe-drag-y', event.clientY + 12 + 'px');
+    icon.move(event.clientX, event.clientY);
     overlay.toggleAttribute('data-dwe-drop-active', inDropArea(event.clientX, event.clientY));
   }
 
@@ -128,7 +126,7 @@ export function installConversationDrop(mounted, readFile, openPreview) {
   window.addEventListener('blur', reset, { signal: lifetime.signal });
   return () => {
     reset();
-    iconRoot.unmount();
+    icon.dispose();
     stop();
     lifetime.abort();
   };

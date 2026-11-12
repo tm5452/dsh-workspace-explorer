@@ -5,7 +5,7 @@ import { disks } from './workspace.js';
 import { makeThumbnail } from './thumbnail.js';
 import { PreviewUnavailable } from './preview-unavailable.js';
 import { PdfPreview } from './pdf-preview.js';
-import { usePreviewZoom } from './preview-zoom.js';
+import { useImageViewport } from './preview-zoom.js';
 
 const { createElement: h, useEffect, useLayoutEffect, useRef, useState } = react;
 const coverActions = {
@@ -92,7 +92,7 @@ function ImagePreview({ url, name, onError }) {
   const scroll = useRef(null);
   const [size, setSize] = useState(null);
   const [viewport, setViewport] = useState({ width: 0, height: 0 });
-  usePreviewZoom(scroll);
+  useImageViewport(scroll);
   useEffect(() => {
     const element = scroll.current;
     const observer = new ResizeObserver(() => {
@@ -106,7 +106,7 @@ function ImagePreview({ url, name, onError }) {
   const width = size ? Math.min(size.width, viewport.width, viewport.height * size.width / size.height) : 0;
   return h('div', { className: 'dwe-image-scroll', ref: scroll, tabIndex: 0, 'aria-label': '图片预览' },
     h('img', {
-      className: 'dwe-image', src: url, alt: name, 'data-dwe-zoom-surface': '',
+      className: 'dwe-image', src: url, alt: name, draggable: false, 'data-dwe-zoom-surface': '',
       style: { '--dwe-fit-width': width + 'px' },
       onLoad: event => setSize({ width: event.currentTarget.naturalWidth, height: event.currentTarget.naturalHeight }),
       onError,

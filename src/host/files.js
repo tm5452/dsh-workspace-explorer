@@ -169,7 +169,7 @@ function createDiskAccess() {
     const target = await resolve(input, signal, workspace);
     const directory = await opendir(target);
     const entries = [];
-    const files = [];
+    const withMetadata = [];
     let truncated = false;
     for await (const item of directory) {
       signal.throwIfAborted();
@@ -177,18 +177,19 @@ function createDiskAccess() {
       const type = item.isDirectory() ? 'directory' : item.isFile() ? 'file' : item.isSymbolicLink() ? 'link' : 'other';
       const row = { name: item.name, type };
       entries.push(row);
-      if (type === 'file' || type === 'link') files.push(row);
+      if (type !== 'other') withMetadata.push(row);
     }
-    for (let index = 0; index < files.length; index += 32) {
+    for (let index = 0; index < withMetadata.length; index += 32) {
       signal.throwIfAborted();
-      await Promise.all(files.slice(index, index + 32).map(async row => {
+      await Promise.all(withMetadata.slice(index, index + 32).map(async row => {
         try {
           const child = path.join(target, row.name);
           let safe = row.type === 'link' ? await resolve(child, signal) : child;
           if (workspace && row.type === 'link') safe = normalizeLocalPath(await realpath(safe));
           if (workspace) requireNativeWithin(safe, workspace.nativeRoot);
-          const info = await stat(safe);
+          const info = await (row.type === 'link' ? stat(safe) : lstat(safe));
           row.type = info.isDirectory() ? 'directory' : info.isFile() ? 'file' : 'other';
+          row.modifiedAt = info.mtimeMs;
           if (info.isFile()) row.size = info.size;
         } catch {
           if (row.type === 'link') row.type = 'other';
@@ -217,19 +218,27 @@ function createDiskAccess() {
           if (entry.isDirectory()) { folders.push(child); continue; }
           if (!entry.name.toLowerCase().includes(needle)) continue;
           const absolute = path.join(workspace.root, child);
+          let modifiedAt;
           if (entry.isSymbolicLink()) {
             try {
               const target = await resolve(absolute, signal, workspace);
-              if (!(await stat(target)).isFile()) continue;
+              const info = await stat(target);
+              if (!info.isFile()) continue;
+              modifiedAt = info.mtimeMs;
             } catch {
               signal.throwIfAborted();
               continue;
             }
           } else if (!entry.isFile()) {
             continue;
+          } else {
+            try {
+              const info = await lstat(path.join(folder, entry.name));
+              if (info.isFile()) modifiedAt = info.mtimeMs;
+            } catch { signal.throwIfAborted(); }
           }
           if (matches.length === maxMatches) return { matches, truncated: true, skipped };
-          matches.push({ name: entry.name, path: absolute, relative: child });
+          matches.push({ name: entry.name, path: absolute, relative: child, modifiedAt });
         }
       } catch (error) {
         signal.throwIfAborted();
