@@ -3,7 +3,7 @@ import { explorerCss } from '../ui/styles.js';
 import { scrollHorizontally } from '../ui/horizontal-wheel.js';
 import { parentOf, resourceAddress, sessionFilePath, underPath, windowsPath } from '../ui/navigation.js';
 import { renameFavorites } from '../ui/favorites.js';
-import { installDesktopPathDrop } from '../ui/composer-drop.js';
+import { installConversationPathDrop } from '../ui/composer-drop.js';
 import { installSidebarMotion } from './sidebar-motion.js';
 import { installSidebarClose } from './sidebar-close.js';
 import { installSidebarFade } from './sidebar-fade.js';
@@ -554,7 +554,7 @@ function apply(ctx) {
       }
       document.addEventListener('wheel', wheel, { passive: false, capture: true });
       const disposeFileOpener = installFileOpener();
-      const disposeDesktopPathDrop = installDesktopPathDrop(sidebar.mounted, getInput);
+      const disposeConversationPathDrop = installConversationPathDrop(sidebar.mounted, getInput);
       const disposeMouseGestures = installMouseGestures(gestureAction, gestureBadgeBounds);
       const disposeMotion = installSidebarMotion(sidebar);
       const disposeSidebarClose = installSidebarClose(sidebar, () => projecting || detached);
@@ -564,7 +564,7 @@ function apply(ctx) {
       const disposeSwitch = sidebar.mounted.subscribe(closeDepartingTabs);
       return () => {
         disposeFileOpener();
-        disposeDesktopPathDrop();
+        disposeConversationPathDrop();
         disposeMouseGestures();
         disposeMotion();
         disposeSidebarClose();

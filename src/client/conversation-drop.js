@@ -1,4 +1,5 @@
 import { createDragIcon } from '../ui/drag-icon.js';
+import { createDropOverlay } from '../ui/drop-overlay.js';
 
 export const changedFileButton = '[data-changed-files] button[aria-describedby]';
 const sourceSelector = '[data-presented-file] > button[title], [data-chat-flow] button[class*="_fileMention_"], ' + changedFileButton;
@@ -13,6 +14,7 @@ export function installConversationDrop(mounted, readFile, openPreview) {
   area.className = 'dwe-conversation-drop-area';
   const icon = createDragIcon();
   overlay.append(area, icon.element);
+  const visibility = createDropOverlay(overlay, area);
   let gesture;
   let suppressClick = false;
 
@@ -22,8 +24,8 @@ export function installConversationDrop(mounted, readFile, openPreview) {
     if (previous && document.body.hasPointerCapture(previous.pointerId)) {
       document.body.releasePointerCapture(previous.pointerId);
     }
-    overlay.remove();
-    overlay.removeAttribute('data-dwe-drop-active');
+    icon.element.hidden = true;
+    visibility.hide();
   }
 
   function arm(event) {
@@ -73,11 +75,12 @@ export function installConversationDrop(mounted, readFile, openPreview) {
       document.body.setPointerCapture(event.pointerId);
       layout();
       area.textContent = file.review ? '拖到此处在DSH差异审阅中打开' : '拖到此处在DSH文档预览中打开';
-      document.body.append(overlay);
+      icon.element.hidden = false;
       icon.show(file.file);
     }
     event.preventDefault();
     icon.move(event.clientX, event.clientY);
+    visibility.show();
     overlay.toggleAttribute('data-dwe-drop-active', inDropArea(event.clientX, event.clientY));
   }
 
@@ -126,6 +129,7 @@ export function installConversationDrop(mounted, readFile, openPreview) {
   window.addEventListener('blur', reset, { signal: lifetime.signal });
   return () => {
     reset();
+    visibility.dispose();
     icon.dispose();
     stop();
     lifetime.abort();

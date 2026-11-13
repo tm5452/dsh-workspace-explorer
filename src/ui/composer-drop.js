@@ -1,8 +1,10 @@
 import { disks } from './workspace.js';
 import { windowsPath } from './navigation.js';
+import { createDropOverlay } from './drop-overlay.js';
 
 const { useEffect, useRef } = react;
 const dragType = 'application/x-dsh-workspace-explorer-file';
+const conversationContent = '[data-conversation-content]';
 const editable = '[data-composer-input][contenteditable="true"]';
 const imageTypes = new Map([
   ['png', 'image/png'], ['jpg', 'image/jpeg'], ['jpeg', 'image/jpeg'],
@@ -11,10 +13,23 @@ const imageTypes = new Map([
 
 function composerCard(target, sessionId) {
   if (!sessionId || !(target instanceof Element)) return null;
-  const conversation = target.closest('[data-conversation-content]');
+  const conversation = target.closest(conversationContent);
   if (conversation?.dataset.conversationSession !== sessionId) return null;
   const card = target.closest('[data-composer-card]');
   return card?.querySelector(editable) ? card : null;
+}
+
+function conversationDropArea(sessionId) {
+  if (!sessionId) return;
+  const selector = conversationContent + '[data-conversation-session="' + CSS.escape(sessionId) + '"]';
+  for (const content of document.querySelectorAll(selector)) {
+    if (content.closest('[data-sidebar-right-panel], [hidden], [inert], [aria-hidden="true"]')) continue;
+    if (!content.getClientRects().length || !content.querySelector(editable)) continue;
+    const parent = content.parentElement;
+    const center = document.querySelector('[data-rightbar-col]')?.previousElementSibling;
+    const area = center?.contains(content) ? center : content.closest(':has(> header [data-conversation-header-leading])') ?? parent ?? content;
+    return { area, content };
+  }
 }
 
 function insertPaths(input, items) {
@@ -31,14 +46,60 @@ function insertPaths(input, items) {
   return input.addFiles(references, []);
 }
 
-export function installDesktopPathDrop(mounted, getInput) {
+export function installConversationPathDrop(mounted, getInput) {
+  const lifetime = new AbortController();
+  const capture = { capture: true, signal: lifetime.signal };
+  const frame = document.createElement('div');
+  frame.className = 'dwe-path-drop-frame';
+  frame.setAttribute('aria-hidden', 'true');
+  const { show, hide: reset, dispose } = createDropOverlay(frame);
+
+  function isDesktopDrag(event) {
+    const types = event.dataTransfer?.types;
+    return event.isTrusted && window.__DSH_HOST_PATHS__?.pathFor
+      && types?.includes('Files') && !types.includes('application/x-dsh-file') && !types.includes(dragType);
+  }
+
+  function showFrame(area, active) {
+    const { left, top, right, bottom } = area.getBoundingClientRect();
+    frame.style.inset = [top, innerWidth - right, innerHeight - bottom, left].map(edge => Math.max(0, edge) + 'px').join(' ');
+    frame.toggleAttribute('data-active', active);
+    show();
+  }
+
+  function start(event) {
+    if (!event.dataTransfer?.types.includes(dragType)) return;
+    const area = conversationDropArea(mounted.getSnapshot())?.area;
+    if (area) showFrame(area, false);
+  }
+
+  function hover(event) {
+    const desktop = isDesktopDrag(event);
+    if (!desktop && !event.dataTransfer?.types.includes(dragType)) return;
+    const area = conversationDropArea(mounted.getSnapshot())?.area;
+    if (!area) { reset(); return; }
+    const active = area.contains(event.target);
+    showFrame(area, active);
+    if (!desktop) return;
+    // The host also observes file drags on document. Use only the path drop feedback.
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    event.dataTransfer.dropEffect = active ? 'copy' : 'none';
+  }
+
   function drop(event) {
+    reset();
+    if (!isDesktopDrag(event)) return;
+    const sessionId = mounted.getSnapshot();
+    const area = conversationDropArea(sessionId)?.area;
+    if (!area) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    if (!area.contains(event.target)) return;
     const files = event.dataTransfer?.files;
     const bridge = window.__DSH_HOST_PATHS__;
-    if (!event.isTrusted || !files?.length || !bridge?.pathFor) return;
-    const sessionId = mounted.getSnapshot();
-    const card = composerCard(event.target, sessionId);
-    if (!card) return;
+    const input = getInput(sessionId);
+    if (!files?.length) return;
     let items;
     try {
       const entries = [...event.dataTransfer.items].filter(item => item.kind === 'file');
@@ -47,17 +108,26 @@ export function installDesktopPathDrop(mounted, getInput) {
         folder: entries[index]?.webkitGetAsEntry?.()?.isDirectory === true,
       }));
     }
-    catch { return; }
-    if (items.some(item => !item.path)) return;
-    event.preventDefault();
-    event.stopImmediatePropagation();
-    // The attachment overlay also clears on dragend when a drop bypasses its listener.
-    window.dispatchEvent(new DragEvent('dragend'));
-    const input = getInput(sessionId);
-    if (!insertPaths(input, items)) input?.notify('error', '当前无法引用文件路径');
+    catch { /* The host could not resolve the native file paths. */ }
+    if (!items || items.some(item => !item.path) || !insertPaths(input, items)) {
+      input?.notify('error', '当前无法引用文件路径');
+    }
   }
-  document.addEventListener('drop', drop, true);
-  return () => document.removeEventListener('drop', drop, true);
+
+  const stop = mounted.subscribe(reset);
+  document.addEventListener('dragstart', start, { signal: lifetime.signal });
+  document.addEventListener('dragenter', hover, capture);
+  document.addEventListener('dragover', hover, capture);
+  document.addEventListener('dragleave', event => {
+    if (!event.relatedTarget) reset();
+  }, capture);
+  document.addEventListener('drop', drop, capture);
+  window.addEventListener('dragend', reset, capture);
+  return () => {
+    lifetime.abort();
+    stop();
+    dispose();
+  };
 }
 
 export function useComposerDrop(sessionId, openFolderTab, reportError, root, getInput) {
@@ -70,14 +140,11 @@ export function useComposerDrop(sessionId, openFolderTab, reportError, root, get
     const { signal } = lifetime;
     const capture = { signal, capture: true };
     let highlighted;
-    let highlightClass;
-
-    function highlight(element, className) {
-      if (element === highlighted && className === highlightClass) return;
-      highlighted?.classList.remove(highlightClass);
-      highlighted = element;
-      highlightClass = className;
-      highlighted?.classList.add(highlightClass);
+    function highlightStrip(strip) {
+      if (strip === highlighted) return;
+      highlighted?.classList.remove('dwe-tab-drop-target');
+      highlighted = strip;
+      highlighted?.classList.add('dwe-tab-drop-target');
     }
 
     function targetCard(target) {
@@ -125,32 +192,31 @@ export function useComposerDrop(sessionId, openFolderTab, reportError, root, get
     function over(event) {
       const drag = nativeDrag.current;
       if (!drag || !event.dataTransfer?.types.includes(dragType)) return;
-      const strip = drag.folder && tabStrip(event.target);
-      const card = strip ? null : targetCard(event.target);
-      highlight(strip || card, strip ? 'dwe-tab-drop-target' : 'dwe-drop-target');
-      if (!strip && !card) return;
+      const strip = drag.folder ? tabStrip(event.target) : null;
+      highlightStrip(strip);
+      if (!strip && !conversationDropArea(sessionId)?.area.contains(event.target)) return;
       event.preventDefault();
       event.dataTransfer.dropEffect = 'copy';
     }
 
     function resetNative() {
       nativeDrag.current = null;
-      highlight(null);
+      highlightStrip(null);
     }
 
     function drop(event) {
       const drag = nativeDrag.current;
       if (!drag || event.dataTransfer?.getData(dragType) !== drag.token) return;
       const strip = drag.folder && tabStrip(event.target);
-      const card = strip ? null : targetCard(event.target);
+      const destination = strip ? null : conversationDropArea(sessionId);
       resetNative();
-      if (!strip && !card) return;
+      if (!strip && !destination?.area.contains(event.target)) return;
       event.preventDefault();
       event.stopPropagation();
       if (strip) {
         reportError('');
         openFolderTab(drag.folder, strip.dataset.dockkitStrip);
-      } else void insert(drag.items, 'reference', card);
+      } else void insert(drag.items, 'reference', destination.content.querySelector(editable).closest('[data-composer-card]'));
     }
 
     document.addEventListener('dragover', over, capture);
