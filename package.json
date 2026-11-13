@@ -1,6 +1,7 @@
 {
   "name": "dsh-workspace-explorer",
-  "version": "1.1.32",
+  "version": "1.1.33",
+  "license": "MIT",
   "description": "Windows disk browsing, file operations and persistent preview in DeepSeek Harness Desktop.",
   "type": "module",
   "main": "./lib/index.js",

@@ -19,7 +19,7 @@ dsh plugin --profile web add dsh-workspace-explorer
 在 Harness 的「插件 → 添加插件」中粘贴下方安装包链接，也可粘贴已下载的本地 `.tgz` 路径：
 
 ```text
-https://github.com/tm5452/dsh-workspace-explorer/releases/download/v1.1.3/dsh-workspace-explorer-1.1.3.tgz
+https://github.com/tm5452/dsh-workspace-explorer/releases/download/v1.1.33/dsh-workspace-explorer-1.1.33.tgz
 ```
 
 从本地测试包或目录链接安装的用户，可先在插件列表移除旧条目，再安装正式版。发布变更见 [版本记录](CHANGELOG.md)。
@@ -112,4 +112,8 @@ https://github.com/tm5452/dsh-workspace-explorer/releases/download/v1.1.3/dsh-wo
 
 从源码安装时，先运行 `npm install` 安装 PDF.js，再运行 `node scripts/build-client.mjs` 生成 `lib/client.js`。发布包已包含构建产物。
 
-扩展预览实现沿用 [dsh-preview-extra](https://github.com/LeiYuXingZhou/dsh-preview-extra)，许可证见 `LICENSE-preview-extra`。
+## 许可证
+
+本项目采用 MIT 许可证，详见 [LICENSE](LICENSE)。
+
+扩展预览实现沿用 [dsh-preview-extra](https://github.com/LeiYuXingZhou/dsh-preview-extra)，原版权声明与 MIT 许可证见 [LICENSE-preview-extra](LICENSE-preview-extra)。
