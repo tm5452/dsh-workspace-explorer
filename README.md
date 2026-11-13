@@ -19,7 +19,7 @@ dsh plugin --profile web add dsh-workspace-explorer
 在 Harness 的「插件 → 添加插件」中粘贴下方安装包链接，也可粘贴已下载的本地 `.tgz` 路径：
 
 ```text
-https://github.com/tm5452/dsh-workspace-explorer/releases/download/v1.1.33/dsh-workspace-explorer-1.1.33.tgz
+https://github.com/tm5452/dsh-workspace-explorer/releases/download/v1.1.34/dsh-workspace-explorer-1.1.34.tgz
 ```
 
 从本地测试包或目录链接安装的用户，可先在插件列表移除旧条目，再安装正式版。发布变更见 [版本记录](CHANGELOG.md)。
@@ -68,6 +68,10 @@ https://github.com/tm5452/dsh-workspace-explorer/releases/download/v1.1.33/dsh-w
 
 **控制下方预览窗。** 窗格默认开启，底栏右侧按钮可随时收起或展开。拖动上下窗格之间的细灰线可调整高度。文件名右侧的「×」可单独关闭当前文件预览。切换文件夹时可继续查看上一次选中的文件。
 
+**保留下方预览标签。** 鼠标移到最左侧标签时，点击图钉固定它。预览另一个文件时，固定的标签会留在右边。可拖动排序，标签放不下时可用滚轮横向滑动。切换标签会释放预览内容，回到已经确认过的标签时直接重新加载。
+
+**在独立标签页预览。** 把上方列表里的文件或下方预览标签拖到顶部标签栏，即可打开独立预览卡片并直接加载内容。拖到会话区则引用文件路径。
+
 **在侧栏浏览文档并缩放。** PDF 和 Office 文档可上下连续滚动，按住 Ctrl 滚动滚轮可缩放，放大后可按住左键拖动平移。Office 使用 Harness 本机转换服务，Excel 按打印版式显示。图片可直接用滚轮以鼠标位置为中心缩放，按住左键拖动可平移画布。右上角仍可打开 DSH 文档预览。
 
 | 类别 | 支持格式 | 预览内容 |
@@ -75,7 +79,8 @@ https://github.com/tm5452/dsh-workspace-explorer/releases/download/v1.1.33/dsh-w
 | 图片 | PNG、JPG / JPEG、GIF、WebP、BMP、ICO、AVIF | 显示图片 |
 | 视频 | MP4、WebM、M4V、MOV、MKV 等 | 尝试显示首帧，点击播放。取决于 DSH 内置浏览器能否解码 |
 | 音频 | MP3、WAV、OGG、OGA、M4A、AAC、FLAC、Opus | 播放音频，同样取决于解码支持 |
-| 纯文本与代码 | TXT、MD、JSON、CSV、HTML、PY 等 | 默认按 UTF-8 显示，Python 脚本也可按文件头声明的编码预览。最多读取前 2 MB |
+| 纯文本与代码 | TXT、MD、JSON、CSV、PY 等 | 按可视范围渲染，最多读取前 2 MB。Python 脚本也可按文件头声明的编码预览 |
+| 网页 | HTML、HTM | 小窗点击「打开网页预览」，独立预览直接加载。支持自包含网页 |
 | 字幕 | SRT、VTT、ASS、SSA | 查看字幕时间和正文，也可切换到原始文本 |
 | 字体 | TTF、OTF、WOFF、WOFF2 | 查看字体样张 |
 | 3D 模型 | STL、OBJ、PLY、GLB、glTF | 旋转、缩放、平移模型，可切换线框。glTF 须内嵌模型数据 |

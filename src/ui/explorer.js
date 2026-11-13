@@ -5,6 +5,8 @@ import { useComposerDrop } from './composer-drop.js';
 import { Thumbnail } from './thumbnail.js';
 import { DeleteDialog, FileMenu, RenameDialog } from './file-menu.js';
 import { Favorites, toggleFavorite, useFavorites } from './favorites.js';
+import { createTabDragIcon } from './drag-icon.js';
+import { confirmStackPreview, emptyPreviewStack, moveStackPreview, openStackPreview, previewInScope, removeStackPreviews } from './preview-stack.js';
 
 const { createElement: h, useEffect, useLayoutEffect, useRef, useState, useCallback, useSyncExternalStore } = react;
 const collator = new Intl.Collator('zh-CN', { numeric: true, sensitivity: 'base' });
@@ -18,6 +20,8 @@ const icons = {
   drive: 'M3 13h18v6H3zm0 0 3-7h12l3 7m-4 3h1',
   workspace: 'M3 7h6l2 2h10v11H3Zm9 7h6m-2-2 2 2-2 2',
   close: 'm6 6 12 12M18 6 6 18',
+  pin: 'M16 3l5 5-4 2-2 5v3l-3 1-7-7 1-3h3l5-2 2-4ZM9 16l-6 5',
+  unpin: 'M16 3l5 5-4 2-1 2M9 9H6l-1 3 7 7 3-1v-3M9 16l-6 5M3 3l18 18',
   external: 'M14 4h6v6m0-6-9 9m7-1v7H5V6h7',
   chevron: 'm9 6 6 6-6 6',
   recent: 'M15 11a6 6 0 1 1-12 0 6 6 0 0 1 12 0Zm-6-3v3l2 2m8-8v13m-3-3 3 3 3-3',
@@ -51,6 +55,129 @@ function tool(name, label, onClick, disabled = false, pressed) {
     type: 'button', className: 'dwe-tool', 'aria-label': label, title: label, onClick, disabled,
     'aria-pressed': pressed, 'data-dwe-tool': name,
   }, icon(name));
+}
+
+function PreviewTabs({ tabs, active, canDragOut, startPreviewDrag, activate, togglePin, close, reorder }) {
+  const dragging = useRef(null);
+  const strip = useRef(null);
+  const [slot, setSlot] = useState(null);
+  const suppressClick = useRef(false);
+  useEffect(() => () => {
+    dragging.current?.listeners.abort();
+    dragging.current?.external?.cancel();
+    dragging.current?.badge?.dispose();
+  }, []);
+
+  useLayoutEffect(() => {
+    const element = strip.current;
+    const tab = element.querySelector('[data-active]');
+    if (!tab) return;
+    const bounds = element.getBoundingClientRect();
+    const { left, right } = tab.getBoundingClientRect();
+    if (left < bounds.left) element.scrollLeft += left - bounds.left;
+    else if (right > bounds.right) element.scrollLeft += right - bounds.right;
+  }, [active]);
+
+  function reset() {
+    dragging.current?.listeners.abort();
+    dragging.current?.external?.cancel();
+    dragging.current?.badge?.dispose();
+    dragging.current = null;
+    setSlot(null);
+  }
+
+  function insertion(element, x) {
+    const children = [...element.children];
+    const index = children.findIndex(tab => {
+      const { left, width } = tab.getBoundingClientRect();
+      return x < left + width / 2;
+    });
+    return index < 0 ? children.length : index;
+  }
+
+  function updateInsertion() {
+    const drag = dragging.current;
+    if (!drag?.started) return;
+    const element = strip.current;
+    const { left, right, top, bottom } = element.getBoundingClientRect();
+    drag.inside = drag.x >= left && drag.x < right && drag.y >= top && drag.y < bottom;
+    const index = drag.inside ? insertion(element, drag.x) : null;
+    const from = tabs.findIndex(tab => tab.id === drag.id);
+    drag.slot = index === from || index === from + 1 ? null : index;
+    setSlot(drag.slot);
+  }
+
+  function movePointer(event) {
+      const drag = dragging.current;
+      if (drag?.pointerId !== event.pointerId) return;
+      if (!drag.started) {
+        if (Math.max(Math.abs(event.clientX - drag.x), Math.abs(event.clientY - drag.y)) < 4) return;
+        drag.started = true;
+        suppressClick.current = true;
+        drag.external = startPreviewDrag(strip.current, drag.file);
+        drag.badge = createTabDragIcon(drag.source.querySelector('.dwe-preview-icon :is(svg, img)'));
+      }
+      drag.x = event.clientX;
+      drag.y = event.clientY;
+      const element = strip.current;
+      const { left, right, top, bottom } = element.getBoundingClientRect();
+      if (drag.y >= top && drag.y < bottom && drag.x >= left && drag.x < right) {
+        if (drag.x < left + 16) element.scrollLeft -= 12;
+        else if (drag.x > right - 16) element.scrollLeft += 12;
+      }
+      updateInsertion();
+      drag.external?.move(drag.x, drag.y);
+      drag.badge.move(drag.x, drag.y);
+  }
+
+  function finishPointer(event) {
+      const drag = dragging.current;
+      if (drag?.pointerId !== event.pointerId) return;
+      if (drag.started) {
+        drag.x = event.clientX;
+        drag.y = event.clientY;
+        updateInsertion();
+        if (!drag.inside) drag.external?.finish(drag.x, drag.y);
+        else if (drag.slot !== null) {
+          const after = drag.slot === tabs.length;
+          reorder(drag.id, tabs[after ? drag.slot - 1 : drag.slot].id, after);
+        }
+      }
+      reset();
+  }
+
+  return h('div', { ref: strip, className: 'dwe-preview-tabs', role: 'group', 'aria-label': '预览标签页',
+    onScroll: updateInsertion,
+    onPointerDownCapture: () => { suppressClick.current = false; },
+    onClickCapture: event => {
+      if (suppressClick.current && event.detail !== 0) event.stopPropagation();
+    },
+  }, tabs.map((tab, index) => h('div', {
+    key: tab.id, className: 'dwe-preview-name', 'data-active': tab.id === active || undefined,
+    'data-insert': slot === index ? 'before' : slot === tabs.length && index === tabs.length - 1 ? 'after' : undefined,
+  },
+  h('button', {
+    type: 'button', className: 'dwe-preview-drag', 'data-draggable': canDragOut || undefined,
+    title: tab.file.absolute, 'aria-pressed': tab.id === active,
+    onClick: () => activate(tab.id),
+    onDragStart: event => event.preventDefault(),
+    onPointerDown: event => {
+      if (event.button !== 0 || !event.isPrimary || !canDragOut || dragging.current) return;
+      const listeners = new AbortController();
+      const capture = { capture: true, signal: listeners.signal };
+      dragging.current = {
+        id: tab.id, file: tab.file, source: event.currentTarget,
+        pointerId: event.pointerId, x: event.clientX, y: event.clientY, listeners,
+      };
+      window.addEventListener('pointermove', movePointer, capture);
+      window.addEventListener('pointerup', finishPointer, capture);
+      window.addEventListener('pointercancel', reset, capture);
+      window.addEventListener('blur', reset, { signal: listeners.signal });
+    },
+  }, h('span', { className: 'dwe-preview-icon', 'aria-hidden': true }, fileIcon(tab.file.name, 'file')),
+  h('span', { className: 'dwe-preview-filename' }, tab.file.name)),
+  index === 0 && tool(tab.pinned ? 'unpin' : 'pin', tab.pinned ? '取消固定预览' : '固定预览', () => togglePin(tab.id)),
+  tool('close', '关闭预览 · ' + tab.file.name, () => close(tab.id)))));
 }
 
 function compareEntries(a, b) {
@@ -199,7 +326,7 @@ function PreviewDivider({ root, ratio, setRatio }) {
 
 export function Explorer({
   cwd, sessionId, initialPath, bindFileActions, getTarget, onPath, openLocal, openDocument, openFolderTab,
-  refreshDirectories, updateRenamedPath, getInput,
+  openPreviewTab, refreshDirectories, updateRenamedPath, getInput,
 }) {
   const workspace = windowsPath(cwd);
   const [localHistory, setLocalHistory] = useState(() => firstPath(initialPath === undefined ? workspace : initialPath));
@@ -214,7 +341,7 @@ export function Explorer({
   const [revision, setRevision] = useState(0);
   const [listing, setListing] = useState(null);
   const [selection, setSelection] = useState(emptySelection);
-  const [preview, setPreview] = useState(null);
+  const [previewStack, setPreviewStack] = useState(emptyPreviewStack);
   const [previewOpen, setPreviewOpen] = useState(true);
   const [splitRatio, setSplitRatio] = useState(0.55);
   const [editor, setEditor] = useState(null);
@@ -229,10 +356,10 @@ export function Explorer({
   const favorites = useFavorites();
   const favoritesButton = useRef(null);
   const closeFavorites = useCallback(() => setFavoritesOpen(false), []);
-  const { startDrag, send: sendToComposer } = useComposerDrop(
-    sessionId, openFolderTab, setActionError, root, getInput,
+  const { startDrag, startPreviewDrag, send: sendToComposer } = useComposerDrop(
+    sessionId, openFolderTab, openPreviewTab, setActionError, root, getInput,
   );
-  const dragFolder = (event, path) => startDrag(event, [{ path, folder: true }], path);
+  const dragFolder = (event, path) => startDrag(event, [{ path, folder: true }], { folder: path });
   const [locating, setLocating] = useState(false);
   const [viewModes, setViewModes] = useState(() => new Map());
   const scroll = useRef(null);
@@ -260,7 +387,9 @@ export function Explorer({
     matches: [...searchReady.matches].sort((a, b) =>
       (sortByModified ? compareModified(a, b) : 0) || collator.compare(a.name, b.name) || collator.compare(a.relative, b.relative)),
   } : searchReady, [searchReady, sortByModified]);
-  const shownPreview = preview && (!workspaceMode || underPath(preview.absolute, root)) ? preview : null;
+  const previewTabs = previewStack.tabs.filter(tab => previewInScope(tab, root));
+  const activePreview = previewTabs.find(tab => tab.id === previewStack.active) ?? previewTabs[0];
+  const shownPreview = activePreview?.file;
   const selectedEntries = term ? [] : entries.filter(entry => selection.names.has(entry.name));
   const composerItems = entries => entries.map(entry => ({
     name: entry.name, path: entry.path ?? joinPath(path, entry.name), folder: entry.type !== 'file',
@@ -278,12 +407,12 @@ export function Explorer({
     setLocalHistory(rebase);
     setScoped(value => value && underPath(from, value.root) && underPath(to, value.root)
       ? { ...value, history: rebase(value.history) } : value);
-    setPreview(current => {
-      if (!current) return current;
-      const absolute = renamePath(current.absolute, from, to);
-      return absolute === current.absolute ? current
-        : { ...current, absolute, name: absolute.split('\\').at(-1), address: resourceAddress(absolute) };
-    });
+    setPreviewStack(stack => ({ ...stack, tabs: stack.tabs.map(tab => {
+      const absolute = renamePath(tab.file.absolute, from, to);
+      return absolute === tab.file.absolute ? tab : {
+        ...tab, file: { ...tab.file, absolute, name: absolute.split('\\').at(-1), address: resourceAddress(absolute) },
+      };
+    }) }));
   }, []);
   const closeMenu = useCallback((restore = false) => {
     if (restore === true) menu?.focus?.focus({ preventScroll: true });
@@ -392,10 +521,9 @@ export function Explorer({
 
   const openPreview = useCallback((absolute, name, size, line) => {
     const targetLine = Number.isSafeInteger(line) && line > 0 ? line : undefined;
-    setPreview(current => current?.absolute === absolute && !targetLine ? current : {
-      name, absolute, size, line: targetLine, address: resourceAddress(absolute),
-    });
-  }, []);
+    const file = { name, absolute, size, line: targetLine, address: resourceAddress(absolute) };
+    setPreviewStack(stack => openStackPreview(stack, file, underPath(absolute, root) ? root : null));
+  }, [root]);
 
   const revealFile = useCallback((absolute, name, size, line) => {
     const folder = parentOf(absolute);
@@ -533,7 +661,7 @@ export function Explorer({
       names: new Set([...current.names].filter(name => !names.has(name))),
       anchor: names.has(current.anchor) ? null : current.anchor,
     }));
-    setPreview(current => current && result.removed.some(path => underPath(current.absolute, path)) ? null : current);
+    setPreviewStack(stack => removeStackPreviews(stack, tab => result.removed.some(path => underPath(tab.file.absolute, path)), root));
     refreshDirectories(result.changed, result.removed);
     if (result.failed) {
       setActionError('已移入回收站 ' + result.completed + ' 项，' + result.failed + ' 项未完成');
@@ -682,7 +810,7 @@ export function Explorer({
           h('span', null, '名称'), h('span', null, '类型'), h('span', null, '大小')),
         term ? h(SearchResults, { found, select: openSearchHit, canDrag: Boolean(sessionId),
           contextMenu: (event, match) => showMenu(event, { ...match, type: 'file' }),
-          drag: (event, match) => startDrag(event, [match]),
+          drag: (event, match) => startDrag(event, [match], { preview: { absolute: match.path, name: match.name } }),
         })
           : workspaceMode && !root ? h('p', { className: 'dwe-message' }, '当前会话没有可浏览的本机工作区。')
           : !ready ? h('p', { className: 'dwe-message', role: 'status' }, '正在读取…')
@@ -697,7 +825,10 @@ export function Explorer({
                   draggable: entry.type !== 'other' && Boolean(sessionId),
                   onDragStart: event => {
                     const absolute = entry.path ?? joinPath(path, entry.name);
-                    startDrag(event, composerItems(dragEntries(entry)), entry.type === 'file' ? undefined : absolute);
+                    const tab = entry.type === 'file'
+                      ? { preview: { absolute, name: entry.name, size: entry.size } }
+                      : { folder: absolute };
+                    startDrag(event, composerItems(dragEntries(entry)), tab);
                   },
                   onClick: event => select(event, entry),
                   onDoubleClick: event => { if (!event.ctrlKey && !event.shiftKey) activate(entry); },
@@ -728,13 +859,22 @@ export function Explorer({
     previewOpen && h('section', { className: 'dwe-preview', 'aria-label': '文件预览' },
       h('header', { className: 'dwe-preview-bar' },
         h('span', { className: 'dwe-preview-label' }, '预览'),
-        shownPreview && h('span', { className: 'dwe-preview-name', title: shownPreview.absolute },
-          fileIcon(shownPreview.name, 'file'),
-          h('span', null, shownPreview.name),
-          tool('close', '关闭当前文件预览', () => setPreview(null))),
+        previewTabs.length > 0 && h(PreviewTabs, {
+          tabs: previewTabs, active: activePreview.id, canDragOut: Boolean(sessionId), startPreviewDrag,
+          activate: id => setPreviewStack(stack => ({ ...stack, active: id })),
+          togglePin: id => setPreviewStack(stack => ({ ...stack,
+            tabs: stack.tabs.map(tab => tab.id === id ? { ...tab, pinned: !tab.pinned } : tab),
+          })),
+          close: id => setPreviewStack(stack => removeStackPreviews(stack, tab => tab.id === id, root)),
+          reorder: (from, to, after) => setPreviewStack(stack => moveStackPreview(stack, from, to, after)),
+        }),
+        shownPreview && h('span', { className: 'dwe-v-divider', 'aria-hidden': true }),
         shownPreview && tool('external', '在 DSH 文档预览中打开', openNative)),
       h('div', { className: 'dwe-preview-body' },
-        shownPreview ? h(PreviewBoundary, { key: JSON.stringify([shownPreview.absolute, root]) }, h(Preview, { file: shownPreview, root }))
+        shownPreview ? h(PreviewBoundary, { key: JSON.stringify([activePreview.id, shownPreview.absolute, root]) },
+          h(Preview, { file: shownPreview, root, confirmed: activePreview.confirmed,
+            onConfirm: () => setPreviewStack(stack => confirmStackPreview(stack, activePreview.id, shownPreview)),
+          }))
           : h('p', { className: 'dwe-preview-hint' }, '单击一个文件进行预览'))),
     sessionId && menu && h(FileMenu, { menu, close: closeMenu, invoke: runMenuAction, groups: [
       { label: '对话框操作', items: conversationActions },
@@ -766,5 +906,3 @@ export function ExplorerTitle({ path }) {
   return h('span', { 'data-dwe-tab-title': '', title: path ?? name },
     fileIcon('', 'directory'), h('span', null, name));
 }
-
-

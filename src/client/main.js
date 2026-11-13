@@ -4,6 +4,7 @@ import { scrollHorizontally } from '../ui/horizontal-wheel.js';
 import { parentOf, resourceAddress, sessionFilePath, underPath, windowsPath } from '../ui/navigation.js';
 import { renameFavorites } from '../ui/favorites.js';
 import { installConversationPathDrop } from '../ui/composer-drop.js';
+import { FilePreviewTab, FilePreviewTitle, previewTabAddress, previewTabLabel } from '../ui/preview-tab.js';
 import { installSidebarMotion } from './sidebar-motion.js';
 import { installSidebarClose } from './sidebar-close.js';
 import { installSidebarFade } from './sidebar-fade.js';
@@ -22,6 +23,7 @@ const id = 'dsh-workspace-explorer';
 // (extension)`. Our kind is ours alone, so nothing can collide, and the tree, the
 // preview and every interaction are identical either way.
 const OWN_KIND = 'dsh-workspace-explorer';
+const PREVIEW_KIND = 'dsh-workspace-explorer-preview';
 const inject = ['slots'];
 const h = react.createElement;
 const instancePrefix = 'dsh-resource://workspace-explorer/tab/';
@@ -277,6 +279,13 @@ function apply(ctx) {
       }
     }
 
+    function openPreviewTab(file, root, paneId, sessionId) {
+      if (sidebar.mounted.getSnapshot() !== sessionId) return;
+      const address = previewTabAddress(file, root);
+      if (!address) return;
+      sidebar.openResource(address, { kind: PREVIEW_KIND, paneId, params: file.line ? { line: file.line } : undefined });
+    }
+
     async function statFile(sessionId, file, signal) {
       try {
         const result = await scope.remote.workspaceFiles.stat(sessionId, file, signal);
@@ -503,7 +512,7 @@ function apply(ctx) {
       const sessionId = target?.sessionId;
       return reactDom.createPortal(h(Explorer, {
         sessionId, cwd, initialPath: view.initialPath, getTarget: view.getTarget, bindFileActions: view.bindFileActions,
-        onPath: view.onPath, openLocal, openDocument, openFolderTab, refreshDirectories, updateRenamedPath, getInput,
+        onPath: view.onPath, openLocal, openDocument, openFolderTab, openPreviewTab, refreshDirectories, updateRenamedPath, getInput,
       }), view.host);
     }
 
@@ -545,8 +554,8 @@ function apply(ctx) {
       document.head.appendChild(style);
       function wheel(event) {
         if (!(event.target instanceof Element)) return;
-        const path = event.target.closest('.dwe-path');
-        if (path) scrollHorizontally(event, path);
+        const scroller = event.target.closest('.dwe-path, .dwe-preview-tabs');
+        if (scroller) scrollHorizontally(event, scroller);
         else {
           const strip = event.target.closest('[data-dockkit-strip-tabs]');
           if (strip?.querySelector('[data-dwe-tab-title]')) scrollHorizontally(event, strip);
@@ -582,6 +591,8 @@ function apply(ctx) {
       ['shell.overlay', undefined, Keeper],
       ['sidebar.right.pane.tab', id, Anchor],
       ['sidebar.right.pane.tab.title', id, Title],
+      ['sidebar.right.pane.tab', PREVIEW_KIND, FilePreviewTab],
+      ['sidebar.right.pane.tab.title', PREVIEW_KIND, FilePreviewTitle],
       ['sidebar.right.tab.guide.entry', id, ExplorerGuide],
     ]) {
       scope.effect(() => scope.slots.inject(name, () =>
@@ -592,6 +603,9 @@ function apply(ctx) {
     // log a registration error — so the `files` row is left to that plugin (or to the
     // built-in page when it steps aside), and file clicks still land on our page through
     // installFileOpener(), which patches the host's openResource whatever kind is in front.
+    scope.effect(() => scope.sidebarRightTabs.register({
+      id: PREVIEW_KIND, kind: PREVIEW_KIND, priority: 'extension', title: previewTabLabel,
+    }));
     scope.effect(() => {
       // The tab strip and the guide row both read 电脑文件资源管理器.
       const label = () => '电脑文件资源管理器';

@@ -35,3 +35,21 @@ export function createDropOverlay(element, content = element) {
     },
   };
 }
+
+export function createDropFrame(kind) {
+  const frame = document.createElement('div');
+  frame.className = 'dwe-path-drop-frame';
+  frame.dataset.dropFrame = kind;
+  frame.setAttribute('aria-hidden', 'true');
+  const overlay = createDropOverlay(frame);
+
+  return {
+    show({ left, top, right, bottom }, active) {
+      frame.style.inset = [top, innerWidth - right, innerHeight - bottom, left].map(edge => Math.max(0, edge) + 'px').join(' ');
+      frame.toggleAttribute('data-active', active);
+      overlay.show();
+    },
+    hide: overlay.hide,
+    dispose: overlay.dispose,
+  };
+}

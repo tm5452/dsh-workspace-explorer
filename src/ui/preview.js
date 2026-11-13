@@ -6,8 +6,9 @@ import { makeThumbnail } from './thumbnail.js';
 import { PreviewUnavailable } from './preview-unavailable.js';
 import { PdfPreview } from './pdf-preview.js';
 import { useImageViewport } from './preview-zoom.js';
+import { TextPreview } from './text-preview.js';
 
-const { createElement: h, useEffect, useLayoutEffect, useRef, useState } = react;
+const { createElement: h, useEffect, useRef, useState } = react;
 const coverActions = {
   [PREVIEW_IDS.archive]: '解压预览',
   [PREVIEW_IDS.model]: '查看模型',
@@ -37,7 +38,7 @@ export class PreviewBoundary extends react.Component {
   }
 
   render() {
-    return this.state.failed ? h(PreviewUnavailable) : this.props.children;
+    return this.state.failed ? h(PreviewUnavailable, { standalone: this.props.standalone }) : this.props.children;
   }
 }
 
@@ -113,32 +114,11 @@ function ImagePreview({ url, name, onError }) {
     }));
 }
 
-function TextPreview({ text, eof, file }) {
-  const content = useRef(null);
-  useLayoutEffect(() => {
-    if (!file.line || !text) return;
-    let offset = 0;
-    for (let line = 1; line < file.line; line++) {
-      const end = text.indexOf('\n', offset);
-      if (end < 0) return;
-      offset = end + 1;
-    }
-    if (offset === text.length) return;
-    const range = document.createRange();
-    range.setStart(content.current.firstChild, offset);
-    range.setEnd(content.current.firstChild, offset + 1);
-    const scroll = content.current.parentElement;
-    scroll.scrollTop += range.getBoundingClientRect().top - scroll.getBoundingClientRect().top - 12;
-  }, [file, text]);
-  return h('pre', { ref: content, className: 'dwe-text' },
-    text || '（空文件）', eof ? '' : '\n\n… 仅显示首页，可在原生预览中继续查看');
-}
-
-export function Preview({ file, root }) {
+export function Preview({ file, root, openImmediately = false, confirmed = openImmediately, onConfirm }) {
   const [result, setResult] = useState({ kind: 'loading' });
-  const [started, setStarted] = useState(false);
   const dot = file.name.lastIndexOf('.');
   const extension = dot > 0 ? file.name.slice(dot + 1).toLowerCase() : '';
+  const isHtml = extension === 'html' || extension === 'htm';
   const definition = previewDefinitions.find(entry => entry.extensions.includes(extension));
   const isDocument = extension === 'pdf' || officeExtensions.has(extension);
   const mediaType = thumbnailType(file.name);
@@ -146,7 +126,7 @@ export function Preview({ file, root }) {
   const videoType = mediaType?.startsWith('video/') ? mediaType : undefined;
   const Body = previewBodies[videoType ? PREVIEW_IDS.media : definition?.id];
   const isAudio = definition?.id === PREVIEW_IDS.media && !videoType;
-  const waiting = Boolean(isDocument || videoType || (Body && !isAudio)) && !started;
+  const waiting = Boolean(isHtml || isDocument || videoType || (Body && !isAudio)) && !confirmed;
 
   useEffect(() => {
     if (waiting) return;
@@ -155,10 +135,13 @@ export function Preview({ file, root }) {
     let objectUrl;
     async function load() {
       try {
-        if (Body || mime) {
+        if (isHtml || Body || mime) {
           const data = await disks.readBytes(file.absolute, signal, root);
           if (signal.aborted) return;
-          if (Body) {
+          if (isHtml) {
+            objectUrl = URL.createObjectURL(new Blob([data], { type: 'text/html' }));
+            setResult({ kind: 'html', url: objectUrl });
+          } else if (Body) {
             setResult({ kind: 'vendor', Body, data });
           } else {
             objectUrl = URL.createObjectURL(new Blob([data], { type: mime }));
@@ -182,13 +165,18 @@ export function Preview({ file, root }) {
       controller.abort();
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [file, root, waiting, Body, mime, extension, isDocument]);
+  }, [file, root, waiting, Body, mime, extension, isDocument, isHtml]);
 
-  if (waiting || (!started && !mime && !Body && result.kind === 'unavailable')) {
-    const label = videoType ? '播放视频' : isDocument ? '查看文档' : coverActions[definition?.id] ?? '查看预览';
-    return h(PreviewCover, { file, root, videoType, label, archive: definition?.id === PREVIEW_IDS.archive, start: () => setStarted(true) });
+  if (waiting || (!confirmed && !mime && !Body && result.kind === 'unavailable')) {
+    const label = isHtml ? '打开网页预览' : videoType ? '播放视频' : isDocument ? '查看文档' : coverActions[definition?.id] ?? '查看预览';
+    return h(PreviewCover, { file, root, videoType, label, archive: definition?.id === PREVIEW_IDS.archive, start: onConfirm });
   }
   switch (result.kind) {
+    case 'html':
+      return h('iframe', {
+        className: 'dwe-html-preview', src: result.url, title: file.name,
+        sandbox: 'allow-scripts', referrerPolicy: 'no-referrer',
+      });
     case 'vendor':
       return h(result.Body, {
         content: { kind: 'bytes', data: result.data }, resourceAddress: file.address, wrap: true,
@@ -204,12 +192,8 @@ export function Preview({ file, root }) {
     case 'text':
       return h(TextPreview, { text: result.text, eof: result.eof, file });
     case 'unavailable':
-      return h(PreviewUnavailable);
+      return h(PreviewUnavailable, { standalone: openImmediately });
     default:
       return h('p', { className: 'dwe-preview-hint', role: 'status' }, isDocument ? '正在加载文档…' : '正在读取文件…');
   }
 }
-
-
-
-
