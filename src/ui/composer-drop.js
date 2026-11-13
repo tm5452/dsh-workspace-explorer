@@ -1,6 +1,5 @@
 import { disks } from './workspace.js';
 import { windowsPath } from './navigation.js';
-import { createDragIcon } from './drag-icon.js';
 
 const { useEffect, useRef } = react;
 const dragType = 'application/x-dsh-workspace-explorer-file';
@@ -61,9 +60,8 @@ export function installDesktopPathDrop(mounted, getInput) {
   return () => document.removeEventListener('drop', drop, true);
 }
 
-export function useComposerDrop(sessionId, openFolderTab, reportError, root, closeMenu, getInput) {
+export function useComposerDrop(sessionId, openFolderTab, reportError, root, getInput) {
   const nativeDrag = useRef(null);
-  const rightDrag = useRef(null);
   const sendToComposer = useRef(null);
 
   useEffect(() => {
@@ -73,8 +71,6 @@ export function useComposerDrop(sessionId, openFolderTab, reportError, root, clo
     const capture = { signal, capture: true };
     let highlighted;
     let highlightClass;
-    let suppressContextMenu = false;
-    let dragIcon;
 
     function highlight(element, className) {
       if (element === highlighted && className === highlightClass) return;
@@ -157,69 +153,15 @@ export function useComposerDrop(sessionId, openFolderTab, reportError, root, clo
       } else void insert(drag.items, 'reference', card);
     }
 
-    function move(event) {
-      const drag = rightDrag.current;
-      if (!drag || drag.id !== event.pointerId) return;
-      if (!(event.buttons & 2)) { cancelRight(); return; }
-      if (!drag.started) {
-        if (Math.hypot(event.clientX - drag.x, event.clientY - drag.y) < 6) return;
-        drag.started = true;
-        closeMenu();
-        dragIcon ??= createDragIcon();
-        dragIcon.show(drag.items[0].path);
-        document.body.append(dragIcon.element);
-      }
-      event.preventDefault();
-      dragIcon.move(event.clientX, event.clientY);
-      highlight(targetCard(document.elementFromPoint(event.clientX, event.clientY)), 'dwe-drop-target');
-    }
-
-    function cancelRight() {
-      const drag = rightDrag.current;
-      if (!drag) return;
-      rightDrag.current = null;
-      if (drag.started) {
-        suppressContextMenu = true;
-        dragIcon?.element.remove();
-        highlight(null);
-      }
-    }
-
-    function up(event) {
-      const drag = rightDrag.current;
-      if (!drag || drag.id !== event.pointerId || event.button !== 2) return;
-      cancelRight();
-      if (!drag.started) return;
-      event.preventDefault();
-      const card = targetCard(document.elementFromPoint(event.clientX, event.clientY));
-      if (card && drag.source.isConnected) void insert(drag.items, 'attachment', card);
-    }
-
     document.addEventListener('dragover', over, capture);
     document.addEventListener('drop', drop, capture);
     window.addEventListener('dragend', resetNative, { signal });
-    document.addEventListener('pointerdown', () => { suppressContextMenu = false; }, capture);
-    document.addEventListener('pointermove', move, capture);
-    document.addEventListener('pointerup', up, capture);
-    document.addEventListener('pointercancel', cancelRight, capture);
-    document.addEventListener('contextmenu', event => {
-      if (event.button !== 2 || (!rightDrag.current?.started && !suppressContextMenu)) return;
-      event.preventDefault();
-      event.stopImmediatePropagation();
-      suppressContextMenu = false;
-    }, capture);
-    document.addEventListener('keydown', event => {
-      if (event.key === 'Escape') cancelRight();
-    }, capture);
-    window.addEventListener('blur', cancelRight, { signal });
     return () => {
       lifetime.abort();
       sendToComposer.current = null;
-      cancelRight();
       resetNative();
-      if (dragIcon) queueMicrotask(dragIcon.dispose);
     };
-  }, [sessionId, openFolderTab, reportError, root, closeMenu, getInput]);
+  }, [sessionId, openFolderTab, reportError, root, getInput]);
 
   function startDrag(event, items, folder) {
     if (!sessionId) {
@@ -232,15 +174,7 @@ export function useComposerDrop(sessionId, openFolderTab, reportError, root, clo
     event.dataTransfer.setData(dragType, token);
   }
 
-  function startRightDrag(event, items) {
-    if (!sessionId || event.button !== 2 || event.pointerType !== 'mouse') return;
-    rightDrag.current = {
-      id: event.pointerId, x: event.clientX, y: event.clientY,
-      source: event.currentTarget, items, started: false,
-    };
-  }
-
-  return { startDrag, startRightDrag, send: (items, mode) => sendToComposer.current?.(items, mode) };
+  return { startDrag, send: (items, mode) => sendToComposer.current?.(items, mode) };
 }
 
 function tabStrip(target) {

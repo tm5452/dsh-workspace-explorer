@@ -57,6 +57,44 @@ export const explorerCss = `
   background: var(--dsw-alias-bg-base, Canvas); box-shadow: 0 2px 8px #0004;
   transform: translate3d(clamp(0px, var(--dwe-drag-x), 100vw - 44px), clamp(0px, var(--dwe-drag-y), 100vh - 44px), 0);
 }
+.dwe-sidebar-tab-drag {
+  position: fixed; top: 0; left: 0; z-index: 2147483647;
+  display: grid; place-items: center; width: 36px; height: 36px;
+  border-radius: 9px; pointer-events: none; user-select: none;
+  color: var(--dsw-alias-label-primary, CanvasText);
+  background: var(--dsw-alias-bg-base, Canvas);
+  box-shadow: 0 2px 8px #0004;
+  transform: translate3d(clamp(0px, var(--dwe-drag-x), 100vw - 40px), clamp(0px, var(--dwe-drag-y), 100vh - 40px), 0);
+}
+.dwe-sidebar-tab-drag > :is(svg, img) { width: 22px; height: 22px; object-fit: contain; }
+[data-dwe-mouse-gesture-tracking] :is(iframe, webview, object, embed) { pointer-events: none !important; }
+.dwe-mouse-gesture {
+  position: fixed; inset: 0; z-index: 2147483647;
+  display: grid; place-items: center; pointer-events: none; user-select: none;
+}
+.dwe-mouse-gesture-trail {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  fill: none; stroke: #3262E9; stroke-width: 6px; stroke-linecap: round; stroke-linejoin: round;
+}
+.dwe-mouse-gesture[data-stable-click] .dwe-mouse-gesture-trail { visibility: hidden; }
+.dwe-mouse-gesture[data-finished] .dwe-mouse-gesture-trail {
+  animation: dwe-mouse-gesture-trail-fade 220ms ease-out forwards;
+}
+@keyframes dwe-mouse-gesture-trail-fade { to { opacity: 0; } }
+.dwe-mouse-gesture-badge {
+  position: absolute; left: var(--dwe-gesture-badge-x); top: var(--dwe-gesture-badge-y);
+  transform: translate(-50%, -50%);
+  display: none; flex-direction: column; align-items: center; justify-content: center;
+  width: 112px; height: 112px; gap: 8px; border-radius: 20px;
+  background: rgb(0 0 0 / 74%); color: white; font-size: 14px; font-weight: 600; line-height: 1.25;
+}
+.dwe-mouse-gesture[data-action] .dwe-mouse-gesture-badge { display: flex; }
+.dwe-mouse-gesture-badge svg {
+  width: 46px; height: 46px; fill: none; stroke: currentColor; stroke-width: 2;
+  stroke-linecap: round; stroke-linejoin: round;
+}
+.dwe-mouse-gesture[data-action="left"] .dwe-mouse-gesture-badge svg { transform: rotate(180deg); }
+.dwe-mouse-gesture[data-action="up"] .dwe-mouse-gesture-badge svg { transform: rotate(-90deg); }
 .dwe-host { height: 100%; min-height: 0; min-width: 0; }
 [data-dockkit-tab]:has([data-dwe-tab-title]) {
   flex-shrink: 0; min-inline-size: calc(5em + 59px); max-inline-size: max(170px, calc(5em + 59px));

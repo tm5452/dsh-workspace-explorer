@@ -229,9 +229,8 @@ export function Explorer({
   const favorites = useFavorites();
   const favoritesButton = useRef(null);
   const closeFavorites = useCallback(() => setFavoritesOpen(false), []);
-  const dismissMenu = useCallback(() => setMenu(null), []);
-  const { startDrag, startRightDrag, send: sendToComposer } = useComposerDrop(
-    sessionId, openFolderTab, setActionError, root, dismissMenu, getInput,
+  const { startDrag, send: sendToComposer } = useComposerDrop(
+    sessionId, openFolderTab, setActionError, root, getInput,
   );
   const dragFolder = (event, path) => startDrag(event, [{ path, folder: true }], path);
   const [locating, setLocating] = useState(false);
@@ -381,11 +380,15 @@ export function Explorer({
     try { localStorage.setItem(viewKey, mode); } catch { /* Keep the choice for this window. */ }
   }
 
-  function historyStep(delta) {
+  const historyStep = useCallback(delta => {
     if (move(history, delta) === history) return;
     resetNavigation();
     changeHistory(value => move(value, delta));
-  }
+  }, [history, resetNavigation, changeHistory]);
+
+  const goUp = useCallback(() => {
+    if (path && path !== root) navigate(parentOf(path));
+  }, [path, root, navigate]);
 
   const openPreview = useCallback((absolute, name, size, line) => {
     const targetLine = Number.isSafeInteger(line) && line > 0 ? line : undefined;
@@ -410,7 +413,8 @@ export function Explorer({
     setPreviewOpen(true);
   }, [workspaceMode, root, path, ready, resetNavigation, navigate, refresh, openPreview]);
 
-  useLayoutEffect(() => bindFileActions({ refresh, rename, reveal: revealFile }), [bindFileActions, refresh, rename, revealFile]);
+  useLayoutEffect(() => bindFileActions({ refresh, rename, reveal: revealFile, historyStep, goUp }),
+    [bindFileActions, refresh, rename, revealFile, historyStep, goUp]);
 
   function openSearchHit(match) {
     if (underPath(match.path, root)) revealFile(match.path, match.name);
@@ -596,7 +600,7 @@ export function Explorer({
       setEditor(path ?? '');
     } else if (!event.ctrlKey && !event.metaKey && event.altKey && event.key === 'ArrowLeft') historyStep(-1);
     else if (!event.ctrlKey && !event.metaKey && event.altKey && event.key === 'ArrowRight') historyStep(1);
-    else if (!event.ctrlKey && !event.metaKey && event.altKey && event.key === 'ArrowUp' && path && path !== root) navigate(parentOf(path));
+    else if (!event.ctrlKey && !event.metaKey && event.altKey && event.key === 'ArrowUp' && path && path !== root) goUp();
     else if (editing && event.key === 'Escape') closeEditor();
     else return;
     event.preventDefault();
@@ -636,7 +640,7 @@ export function Explorer({
         h('div', { className: 'dwe-nav' },
           tool('back', '后退 (Alt+←)', () => historyStep(-1), history.index === 0),
           tool('forward', '前进 (Alt+→)', () => historyStep(1), history.index === history.paths.length - 1),
-          tool('up', '上一级 (Alt+↑)', () => navigate(parentOf(path)), !path || path === root),
+          tool('up', '上一级 (Alt+↑)', goUp, !path || path === root),
           tool('refresh', '刷新文件夹', refresh),
           tool('home', workspaceMode ? '返回工作区根目录' : '返回此电脑', () => navigate(root), path === root),
           tool('workspace', '跳转至工作区', () => navigate(workspace), !workspace || path === workspace || workspaceMode)),
@@ -679,7 +683,6 @@ export function Explorer({
         term ? h(SearchResults, { found, select: openSearchHit, canDrag: Boolean(sessionId),
           contextMenu: (event, match) => showMenu(event, { ...match, type: 'file' }),
           drag: (event, match) => startDrag(event, [match]),
-          rightDrag: (event, match) => startRightDrag(event, [match]),
         })
           : workspaceMode && !root ? h('p', { className: 'dwe-message' }, '当前会话没有可浏览的本机工作区。')
           : !ready ? h('p', { className: 'dwe-message', role: 'status' }, '正在读取…')
@@ -695,11 +698,6 @@ export function Explorer({
                   onDragStart: event => {
                     const absolute = entry.path ?? joinPath(path, entry.name);
                     startDrag(event, composerItems(dragEntries(entry)), entry.type === 'file' ? undefined : absolute);
-                  },
-                  onPointerDown: event => {
-                    if (entry.type !== 'file' || event.button !== 2) return;
-                    const entries = dragEntries(entry);
-                    if (entries.every(item => item.type === 'file')) startRightDrag(event, composerItems(entries));
                   },
                   onClick: event => select(event, entry),
                   onDoubleClick: event => { if (!event.ctrlKey && !event.shiftKey) activate(entry); },
@@ -747,7 +745,7 @@ export function Explorer({
   );
 }
 
-function SearchResults({ found, select, canDrag, contextMenu, drag, rightDrag }) {
+function SearchResults({ found, select, canDrag, contextMenu, drag }) {
   if (!found) return h('p', { className: 'dwe-message', role: 'status' }, '正在搜索工作区…');
   if (found.error) return h('p', { className: 'dwe-message dwe-error', role: 'alert' }, found.error);
   return h(react.Fragment, null,
@@ -758,7 +756,6 @@ function SearchResults({ found, select, canDrag, contextMenu, drag, rightDrag })
           h('button', {
             type: 'button', className: 'dwe-row dwe-search-hit', title: match.path, onClick: () => select(match),
             draggable: canDrag, onDragStart: event => drag(event, match),
-            onPointerDown: event => rightDrag(event, match),
           }, fileIcon(match.name, 'file'),
           h('span', null, h('span', null, match.name),
             h('small', null, match.relative.slice(0, -(match.name.length + 1)) || '工作区根目录')))))));

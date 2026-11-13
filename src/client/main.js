@@ -5,6 +5,10 @@ import { parentOf, resourceAddress, sessionFilePath, underPath, windowsPath } fr
 import { renameFavorites } from '../ui/favorites.js';
 import { installDesktopPathDrop } from '../ui/composer-drop.js';
 import { installSidebarMotion } from './sidebar-motion.js';
+import { installSidebarClose } from './sidebar-close.js';
+import { installSidebarFade } from './sidebar-fade.js';
+import { installSidebarTabDrag } from './sidebar-tab-drag.js';
+import { installMouseGestures } from './mouse-gestures.js';
 import { cardIconMarkup, cardIconRatio, cardIconViewBox } from '../ui/card-icon.js';
 import { myPcIconMarkup, myPcIconRatio, myPcIconViewBox } from '../ui/my-pc-icon.js';
 
@@ -297,6 +301,33 @@ function apply(ctx) {
       return bindings.get(sidebar.active()?.id) ?? activeView ?? viewList[0];
     }
 
+    function isVisibleExplorer(view) {
+      return view?.fileActions && view.target && view.target.sessionId === sidebar.mounted.getSnapshot()
+        && (view.target.isFloating || sidebar.isExpanded()) && view.host.getClientRects().length > 0;
+    }
+
+    function gestureAction(origin) {
+      if (origin.closest('dialog, [role="dialog"], [role="alertdialog"], [role="menu"]')) return;
+      const visibleViews = viewList.filter(isVisibleExplorer);
+      const pane = origin.closest('[data-dockkit-pane]');
+      const view = visibleViews.find(view => view.host.contains(origin))
+        ?? (pane ? visibleViews.find(view => view.target.paneId === pane.dataset.dockkitPane)
+          : [bindings.get(sidebar.active()?.id), activeView, ...visibleViews].find(isVisibleExplorer));
+      if (!view) return;
+      const { sessionId, paneId } = view.target;
+      return direction => {
+        if (!isVisibleExplorer(view) || view.target.sessionId !== sessionId || view.target.paneId !== paneId) return;
+        if (direction === 'up') view.fileActions.goUp();
+        else view.fileActions.historyStep(direction === 'left' ? -1 : 1);
+      };
+    }
+
+    function gestureBadgeBounds() {
+      const sidebarColumn = document.querySelector('[data-rightbar-col]');
+      const bounds = sidebarColumn?.getBoundingClientRect();
+      if (bounds && bounds.width >= 112 && bounds.height >= 112) return bounds;
+    }
+
     async function openConversationFile(request, signal, { view, onUnavailable }) {
       const { address, sessionId, file, params } = request;
       const metadata = await statFile(sessionId, file, signal);
@@ -524,13 +555,21 @@ function apply(ctx) {
       document.addEventListener('wheel', wheel, { passive: false, capture: true });
       const disposeFileOpener = installFileOpener();
       const disposeDesktopPathDrop = installDesktopPathDrop(sidebar.mounted, getInput);
+      const disposeMouseGestures = installMouseGestures(gestureAction, gestureBadgeBounds);
       const disposeMotion = installSidebarMotion(sidebar);
+      const disposeSidebarClose = installSidebarClose(sidebar, () => projecting || detached);
+      const disposeSidebarFade = installSidebarFade(sidebar);
+      const disposeSidebarTabDrag = installSidebarTabDrag(sidebar.mounted);
       const disposeTabs = sidebar.openTabs.subscribe(syncTabs);
       const disposeSwitch = sidebar.mounted.subscribe(closeDepartingTabs);
       return () => {
         disposeFileOpener();
         disposeDesktopPathDrop();
+        disposeMouseGestures();
         disposeMotion();
+        disposeSidebarClose();
+        disposeSidebarFade();
+        disposeSidebarTabDrag();
         disposeTabs();
         disposeSwitch();
         detached = false;
