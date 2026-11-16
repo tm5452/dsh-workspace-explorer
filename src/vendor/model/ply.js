@@ -152,6 +152,9 @@ function readHeader(u8) {
   if (!INT_TYPES.has(listProp.itemType)) {
     throw new Error(`PLY 解析失败：face 顶点索引类型 "${listProp.itemType}" 必须是整数类型`);
   }
+  if (elements.some(element => element.count > 0 && element.properties.length === 0)) {
+    throw new Error('PLY 解析失败：非空元素缺少属性');
+  }
   return { format, elements, headerEnd, vertexEl, faceEl, listProp };
 }
 

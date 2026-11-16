@@ -1,4 +1,4 @@
-import { underPath } from './navigation.js';
+import { samePath, underPath } from './navigation.js';
 
 export const emptyPreviewStack = { tabs: [], active: null, nextId: 1 };
 
@@ -8,9 +8,10 @@ export function previewInScope(tab, root) {
 
 export function openStackPreview(stack, file, root) {
   const { tabs, nextId } = stack;
-  const existing = tabs.find(tab => tab.file.absolute.toLowerCase() === file.absolute.toLowerCase());
+  const existing = tabs.find(tab => samePath(tab.file.absolute, file.absolute));
   if (existing) {
-    const updated = file.line ? tabs.map(tab => tab === existing ? { ...tab, file } : tab) : tabs;
+    const updated = file.line || existing.file.line !== file.line
+      ? tabs.map(tab => tab === existing ? { ...tab, file } : tab) : tabs;
     return { ...stack, tabs: updated, active: existing.id };
   }
   const first = tabs.find(tab => previewInScope(tab, root));

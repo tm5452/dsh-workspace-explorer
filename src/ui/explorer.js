@@ -1,4 +1,4 @@
-import { joinPath, move, parentOf, renamePath, resourceAddress, underPath, visit, windowsPath } from './navigation.js';
+import { joinPath, move, parentOf, renamePath, resourceAddress, samePath, underPath, visit, windowsPath } from './navigation.js';
 import { formatSize, Preview, PreviewBoundary } from './preview.js';
 import { disks } from './workspace.js';
 import { useComposerDrop } from './composer-drop.js';
@@ -447,7 +447,7 @@ export function Explorer({
 
   const navigate = useCallback(destination => {
     if (workspaceMode && !underPath(destination, root)) return;
-    if (destination === path) {
+    if (samePath(destination, path)) {
       closeEditor();
       setSearch('');
       return;
@@ -494,7 +494,7 @@ export function Explorer({
   useLayoutEffect(() => { scroll.current.scrollTop = 0; }, [path, term]);
   useLayoutEffect(() => {
     const result = resultToReveal.current;
-    if (!result || !ready || result.folder !== path || !selection.names.has(result.name)) return;
+    if (!result || !ready || !samePath(result.folder, path) || !selection.names.has(result.name)) return;
     resultToReveal.current = null;
     scroll.current.querySelector('.dwe-row[aria-pressed="true"]')?.scrollIntoView({ block: 'nearest' });
   }, [path, ready, selection]);
@@ -533,7 +533,7 @@ export function Explorer({
       setLocalHistory(history => visit(history, folder));
     } else {
       navigate(folder);
-      if (folder === path && ready && !ready.entries.some(entry => entry.name === name)) refresh();
+      if (samePath(folder, path) && ready && !ready.entries.some(entry => entry.name === name)) refresh();
     }
     resultToReveal.current = { folder, name };
     setSelection(singleSelection(name));

@@ -276,6 +276,7 @@ export function buildTree(entries) {
   for (const entry of entries || []) {
     const parts = String(entry.path || '').split('/').filter(Boolean);
     if (parts.length === 0) continue;
+    if (parts.length > 256) throw new Error('归档目录嵌套过深');
     let parent = root;
     let base = '';
     for (let i = 0; i < parts.length; i++) {
@@ -284,6 +285,7 @@ export function buildTree(entries) {
       const isLeaf = i === parts.length - 1;
       let node = map.get(path);
       if (!node) {
+        if (map.size >= 20_000) throw new Error('归档目录树节点过多');
         node = {
           name,
           path,
@@ -307,10 +309,11 @@ export function buildTree(entries) {
     }
   }
 
-  const sortRecursive = (node) => {
+  const pending = [root];
+  while (pending.length) {
+    const node = pending.pop();
     node.children.sort(compareTreeNodes);
-    for (const child of node.children) sortRecursive(child);
-  };
-  sortRecursive(root);
+    for (const child of node.children) pending.push(child);
+  }
   return root;
 }

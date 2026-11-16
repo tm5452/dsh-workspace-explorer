@@ -175,6 +175,11 @@ export function parseTar(input, options = {}) {
     // PAX 可覆盖 size / mtime（大文件、精度更高）；size 影响数据区步长，必须用生效值
     let effectiveSize = declaredSize;
     if (pax.size && Number.isFinite(Number(pax.size))) effectiveSize = Number(pax.size);
+    if (!Number.isSafeInteger(effectiveSize) || effectiveSize < 0) {
+      notes.push('归档条目大小无效，已停止读取');
+      truncated = true;
+      break;
+    }
     const nextOffset = dataOffset + Math.ceil(effectiveSize / BLOCK) * BLOCK;
     const effectiveEnd = dataOffset + effectiveSize;
 

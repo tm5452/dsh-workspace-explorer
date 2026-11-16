@@ -1,4 +1,4 @@
-const dragDistance = 2;
+const dragDistance = 6;
 const sampleDistance = 2;
 const minimumStraightness = 0.75;
 const curveTolerance = 10;

@@ -8,6 +8,36 @@ function asset(file) {
   return new URL(pdfAssetsPath + '?file=' + file, location.href).href;
 }
 
+let runtime;
+
+async function scriptBlob(file) {
+  const response = await fetch(asset(file));
+  if (!response.ok) throw new Error('PDF runtime request failed (' + response.status + ')');
+  return new Blob([await response.arrayBuffer()], { type: 'text/javascript' });
+}
+
+function loadRuntime() {
+  runtime ??= (async () => {
+    // Fetch through the application frame. A module worker on the desktop's
+    // custom scheme can otherwise be treated as cross-origin by PDF.js.
+    const [main, worker] = await Promise.all([
+      scriptBlob('build/pdf.min.mjs'), scriptBlob('build/pdf.worker.min.mjs'),
+    ]);
+    const url = URL.createObjectURL(main);
+    try {
+      const { getDocument, GlobalWorkerOptions } = await import(url);
+      GlobalWorkerOptions.workerSrc = URL.createObjectURL(worker);
+      return getDocument;
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+  })().catch(error => {
+    runtime = undefined;
+    throw error;
+  });
+  return runtime;
+}
+
 const pageBatch = 24;
 
 const PdfPage = react.memo(function PdfPage({ pdf, number, initialSize, width, visible, renderZoom }) {
@@ -99,7 +129,7 @@ function PdfPages({ pdf, initialSize }) {
     measured && count < pdf.numPages && h('div', { key: 'more', className: 'dwe-pdf-more', 'aria-hidden': true }));
 }
 
-export function PdfPreview({ data }) {
+export function PdfPreview({ data, standalone }) {
   const [document, setDocument] = useState(null);
   const [failed, setFailed] = useState(false);
   useEffect(() => {
@@ -107,9 +137,8 @@ export function PdfPreview({ data }) {
     let task;
     async function load() {
       try {
-        const { getDocument, GlobalWorkerOptions } = await import(asset('build/pdf.min.mjs'));
+        const getDocument = await loadRuntime();
         if (canceled) return;
-        GlobalWorkerOptions.workerSrc = asset('build/pdf.worker.min.mjs');
         task = getDocument({
           data: data.slice(), cMapPacked: true, useWorkerFetch: false,
           cMapUrl: asset('cmaps/'), standardFontDataUrl: asset('standard_fonts/'), wasmUrl: asset('wasm/'),
@@ -130,6 +159,6 @@ export function PdfPreview({ data }) {
     };
   }, [data]);
 
-  if (failed) return h(PreviewUnavailable);
+  if (failed) return h(PreviewUnavailable, { standalone });
   return document ? h(PdfPages, document) : h('p', { className: 'dwe-preview-hint', role: 'status' }, '正在加载文档页面…');
 }

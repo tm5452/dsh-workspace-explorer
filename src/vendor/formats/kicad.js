@@ -83,7 +83,8 @@ export function parseSexpr(text) {
     if (/^[+-]?(?:\d+\.\d*|\.\d+|\d+)(?:[eE][+-]?\d+)?$/.test(raw)) return Number(raw);
     return raw;
   };
-  const parseNode = () => {
+  const parseNode = (depth = 0) => {
+    if (depth >= 128) throw new Error('S 表达式嵌套过深');
     skip();
     if (text[i] !== '(') throw new Error(`第 ${lineOf(text, i)} 行附近期望「(」`);
     i += 1;
@@ -95,7 +96,7 @@ export function parseSexpr(text) {
         i += 1;
         return node;
       }
-      if (text[i] === '(') node.push(parseNode());
+      if (text[i] === '(') node.push(parseNode(depth + 1));
       else node.push(parseAtom());
     }
   };

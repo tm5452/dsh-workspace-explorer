@@ -85,8 +85,9 @@ export function parseGltfMesh(bytes) {
     }
   };
 
-  const walk = (nodeIndex, parent) => {
+  const walk = (nodeIndex, parent, depth = 0) => {
     if (stopped || seen.has(nodeIndex)) return;
+    if (depth >= 256) throw new Error('glTF 场景节点嵌套过深');
     const node = gltf.nodes && gltf.nodes[nodeIndex];
     if (!node) return;
     seen.add(nodeIndex);
@@ -94,7 +95,7 @@ export function parseGltfMesh(bytes) {
     if (node.mesh !== undefined) emit(node.mesh, world);
     if (node.skin !== undefined) warnings.push('文件包含蒙皮，预览显示绑定姿势');
     const children = Array.isArray(node.children) ? node.children : [];
-    for (const child of children) walk(child, world);
+    for (const child of children) walk(child, world, depth + 1);
   };
 
   const sceneIndex = Number.isInteger(gltf.scene) ? gltf.scene : 0;
@@ -254,11 +255,16 @@ function emitPrimitive(gltf, buffers, primitive, world, out, warnings) {
   }
   const attributes = primitive.attributes || {};
   if (attributes.POSITION === undefined) throw new Error('图元缺少 POSITION');
-  const position = readAccessor(gltf, buffers, gltf.accessors[attributes.POSITION]);
-  if (position.components < 3) throw new Error('POSITION 不是 VEC3');
+  const positionAccessor = gltf.accessors?.[attributes.POSITION];
+  if (positionAccessor?.type !== 'VEC3') throw new Error('POSITION 不是 VEC3');
+  const position = readAccessor(gltf, buffers, positionAccessor);
   let indices = null;
   if (primitive.indices !== undefined) {
-    indices = readAccessor(gltf, buffers, gltf.accessors[primitive.indices]);
+    const indexAccessor = gltf.accessors?.[primitive.indices];
+    if (indexAccessor?.type !== 'SCALAR' || ![5121, 5123, 5125].includes(indexAccessor.componentType)) {
+      throw new Error('图元索引必须是无符号整数');
+    }
+    indices = readAccessor(gltf, buffers, indexAccessor);
   }
   const count = indices ? indices.count : position.count;
   const at = (index) => (indices ? indices.data[index] : index);
@@ -297,30 +303,41 @@ function readAccessor(gltf, buffers, accessor) {
   const components = COMPONENT_COUNT[accessor.type];
   const component = COMPONENTS[accessor.componentType];
   if (!components || !component) throw new Error(`不支持的 accessor（${accessor.type} / ${accessor.componentType}）`);
-  const count = accessor.count | 0;
-  if (count < 0 || count > 5_000_000) throw new Error('accessor 数量异常');
-  const data = new Float32Array(count * components);
-  if (accessor.bufferView !== undefined) {
-    readView(gltf, buffers, accessor.bufferView, accessor.byteOffset || 0, count, components, component, accessor.normalized === true, data);
+  const { count } = accessor;
+  if (!Number.isSafeInteger(count) || count < 0 || count > 5_000_000 || count * components * 4 > 32 * 1024 ** 2) {
+    throw new Error('accessor 数量异常或超出预览内存上限');
   }
+  const view = accessor.bufferView === undefined ? null
+    : validateView(gltf, buffers, accessor.bufferView, accessor.byteOffset ?? 0, count, components, component);
+  const data = new Float32Array(count * components);
+  if (view) readView(view, count, components, component, accessor.normalized === true, data);
   if (accessor.sparse && accessor.sparse.count > 0) {
     applySparse(gltf, buffers, accessor, data, components);
   }
   return { data, count, components };
 }
 
-function readView(gltf, buffers, viewIndex, extraOffset, count, components, component, normalized, target) {
+function validateView(gltf, buffers, viewIndex, extraOffset, count, components, component) {
   const view = gltf.bufferViews && gltf.bufferViews[viewIndex];
   if (!view) throw new Error('bufferView 不存在');
   const buffer = buffers[view.buffer];
   if (!buffer) throw new Error('外部 buffer 缺失');
-  const stride = view.byteStride || component.size * components;
-  const dataView = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength);
-  const base = (view.byteOffset || 0) + extraOffset;
+  const elementSize = component.size * components;
+  const stride = view.byteStride ?? elementSize;
+  const start = view.byteOffset ?? 0;
+  const length = view.byteLength;
+  if (![start, length, stride, extraOffset].every(Number.isSafeInteger) || start < 0 || length < 0
+      || extraOffset < 0 || stride < elementSize || start + length > buffer.byteLength
+      || extraOffset + (count ? (count - 1) * stride + elementSize : 0) > length) {
+    throw new Error('accessor 超出 bufferView');
+  }
+  return { dataView: new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength), base: start + extraOffset, stride };
+}
+
+function readView({ dataView, base, stride }, count, components, component, normalized, target) {
   for (let index = 0; index < count; index++) {
     for (let channel = 0; channel < components; channel++) {
       const offset = base + index * stride + channel * component.size;
-      if (offset < 0 || offset + component.size > buffer.byteLength) throw new Error('accessor 超出 buffer');
       let value = component.read(dataView, offset);
       if (normalized) value = component.norm(value);
       target[index * components + channel] = value;
@@ -330,8 +347,8 @@ function readView(gltf, buffers, viewIndex, extraOffset, count, components, comp
 
 function applySparse(gltf, buffers, accessor, target, components) {
   const sparse = accessor.sparse;
-  const count = sparse.count | 0;
-  if (count < 0 || count > accessor.count) throw new Error('sparse accessor 数量异常');
+  const { count } = sparse;
+  if (!Number.isSafeInteger(count) || count < 0 || count > accessor.count) throw new Error('sparse accessor 数量异常');
   const indexAccessor = {
     bufferView: sparse.indices.bufferView,
     byteOffset: sparse.indices.byteOffset || 0,

@@ -105,7 +105,9 @@ export function Favorites({ anchor, close, folders, navigate, currentPath, remov
       const trigger = button.getBoundingClientRect();
       popup.style.left = Math.max(4, Math.min(trigger.right - bounds.left - popup.offsetWidth,
         bounds.width - popup.offsetWidth - 4)) + 'px';
-      popup.style.top = trigger.bottom - bounds.top + 4 + 'px';
+      popup.style.maxHeight = `min(250px, 50vh, ${Math.max(0, bounds.height - 8)}px)`;
+      popup.style.top = Math.max(4, Math.min(trigger.bottom - bounds.top + 4,
+        bounds.height - popup.offsetHeight - 4)) + 'px';
     }
 
     const observer = new ResizeObserver(position);

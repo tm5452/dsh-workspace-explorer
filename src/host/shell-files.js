@@ -1,19 +1,16 @@
-import { execFile } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { win32 as path } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { promisify } from 'node:util';
+import { createInterface } from 'node:readline';
 
-const execute = promisify(execFile);
 const helper = fileURLToPath(new URL('./ExplorerShell.cs', import.meta.url));
 const script = String.raw`
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
 [Console]::InputEncoding = [System.Text.Encoding]::UTF8
 Add-Type -Path $env:DSH_EXPLORER_SHELL
-$request = ConvertFrom-Json ([Console]::In.ReadToEnd())
-if ($request.action -in 'stage', 'clipboard') {
-    Add-Type -AssemblyName System.Windows.Forms
-}
+Add-Type -AssemblyName System.Windows.Forms
+function Invoke-ExplorerOperation($request) {
 switch ($request.action) {
     'stage' {
         $paths = New-Object System.Collections.Specialized.StringCollection
@@ -65,18 +62,75 @@ switch ($request.action) {
         @{ results = $results } | ConvertTo-Json -Compress
     }
 }
+}
+while ($null -ne ($line = [Console]::In.ReadLine())) {
+    try {
+        $response = Invoke-ExplorerOperation (ConvertFrom-Json $line)
+        [Console]::WriteLine($response)
+    } catch {
+        [Console]::WriteLine('{"error":true}')
+    }
+}
 `;
 const encoded = Buffer.from(script, 'utf16le').toString('base64');
+let worker;
 
-export async function windowsFileOperation(request) {
-  const powershell = path.join(process.env.SystemRoot || 'C:\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
-  const result = execute(powershell, ['-NoProfile', '-NonInteractive', '-STA', '-EncodedCommand', encoded], {
-    windowsHide: true, maxBuffer: 256 * 1024,
-    ...(['transfer', 'recycle'].includes(request.action) ? {} : { timeout: 15000 }),
-    env: { ...process.env, DSH_EXPLORER_SHELL: helper },
+function startWorker() {
+  const powershell = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+  const child = spawn(powershell, ['-NoProfile', '-NonInteractive', '-STA', '-EncodedCommand', encoded], {
+    windowsHide: true, stdio: ['pipe', 'pipe', 'ignore'], env: { ...process.env, DSH_EXPLORER_SHELL: helper },
   });
-  result.child.stdin.on('error', () => {}); // The process result reports early exit or spawn failure.
-  result.child.stdin.end(JSON.stringify(request), 'utf8');
-  const { stdout } = await result;
-  return JSON.parse(stdout.trim());
+  const output = createInterface({ input: child.stdout, crlfDelay: Infinity });
+  let pending;
+  let idle;
+
+  function stop(error) {
+    if (worker === connection) worker = undefined;
+    clearTimeout(idle);
+    if (pending) {
+      clearTimeout(pending.timer);
+      pending.reject(error);
+      pending = undefined;
+    }
+    output.close();
+    child.kill();
+  }
+
+  const connection = {
+    send(request) {
+      clearTimeout(idle);
+      if (pending) return Promise.reject(new Error('Windows 文件操作仍在进行'));
+      const timeout = ['transfer', 'recycle'].includes(request.action) ? 300_000 : 15_000;
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+          stop(Object.assign(new Error('Windows 文件操作超时，请检查已有结果后重试'), { code: 'ETIMEDOUT' }));
+        }, timeout);
+        pending = { resolve, reject, timer };
+        child.stdin.write(JSON.stringify(request) + '\n', 'utf8');
+      });
+    },
+  };
+
+  output.on('line', line => {
+    if (!pending) return;
+    let response;
+    try { response = JSON.parse(line); }
+    catch (error) { stop(error); return; }
+    const { resolve, reject, timer } = pending;
+    pending = undefined;
+    clearTimeout(timer);
+    idle = setTimeout(() => stop(), 60_000);
+    idle.unref();
+    if (response?.error) reject(new Error('Windows 文件操作失败'));
+    else resolve(response);
+  });
+  child.once('error', stop);
+  child.once('close', () => stop(new Error('Windows 文件操作进程已退出')));
+  child.stdin.on('error', stop);
+  return connection;
+}
+
+export function windowsFileOperation(request) {
+  worker ??= startWorker();
+  return worker.send(request);
 }

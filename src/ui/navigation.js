@@ -4,7 +4,7 @@ export function move(history, delta) {
 }
 
 export function visit(history, path) {
-  if (history.paths[history.index] === path) return history;
+  if (samePath(history.paths[history.index], path)) return history;
   const paths = [...history.paths.slice(0, history.index + 1), path];
   return { paths, index: paths.length - 1 };
 }
@@ -29,6 +29,10 @@ export function underPath(path, root) {
   const value = path.toLowerCase();
   const prefix = root.toLowerCase();
   return value === prefix || value.startsWith(prefix.endsWith('\\') ? prefix : prefix + '\\');
+}
+
+export function samePath(a, b) {
+  return a === b || (a != null && b != null && a.toLowerCase() === b.toLowerCase());
 }
 
 export function renamePath(path, from, to) {

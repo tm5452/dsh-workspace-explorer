@@ -50,10 +50,12 @@ export function parseOBJ(bytes) {
     if (!line) continue;
 
     // 行尾反斜杠续行（数据文件里少见，但标准允许）
-    let full = line;
-    while (/\\$/.test(full) && li + 1 < lines.length) {
-      full = full.slice(0, -1) + ' ' + lines[++li].trim();
+    const continued = [];
+    while (line.endsWith('\\') && li + 1 < lines.length) {
+      continued.push(line.slice(0, -1));
+      line = lines[++li].trim();
     }
+    const full = continued.length ? continued.concat(line).join(' ') : line;
     const parts = full.split(/\s+/);
     const kw = parts[0].toLowerCase();
 

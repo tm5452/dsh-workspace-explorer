@@ -8,7 +8,7 @@ export function FileMenu({ menu, groups, close, invoke }) {
     const rowHeight = node.querySelector('button')?.offsetHeight ?? 0;
     node.style.left = Math.max(4, Math.min(menu.x, window.innerWidth - bounds.width - 4)) + 'px';
     node.style.top = Math.max(4, Math.min(menu.y + rowHeight / 2, window.innerHeight - bounds.height - 4)) + 'px';
-    node.querySelector('button:not(:disabled)')?.focus({ preventScroll: true });
+    (node.querySelector('button:not(:disabled)') ?? node).focus({ preventScroll: true });
   }, [menu]);
 
   useEffect(() => {
@@ -24,7 +24,7 @@ export function FileMenu({ menu, groups, close, invoke }) {
   }, [close]);
 
   return reactDom.createPortal(h('div', {
-    ref: root, className: 'dwe-file-menu', role: 'menu', 'aria-label': '文件操作',
+    ref: root, className: 'dwe-file-menu', role: 'menu', 'aria-label': '文件操作', tabIndex: -1,
     onContextMenu: event => event.preventDefault(),
     onKeyDown: event => {
       if (event.key === 'Escape') {

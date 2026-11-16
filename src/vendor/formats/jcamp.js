@@ -194,7 +194,10 @@ function decodeData(data, meta, warnings) {
       warnings.push(`点数超过 ${MAX_POINTS}，后面的点已跳过`);
       break;
     }
-    const values = decodeLine(line);
+    const remaining = MAX_POINTS - xs.length;
+    const limit = paired ? remaining * 2 : remaining + 1;
+    const values = decodeLine(line, limit);
+    if (values.length === limit) warnings.push(`已达到 ${MAX_POINTS} 点的预览上限`);
     if (values.length === 0) continue;
     if (paired) {
       for (let i = 0; i + 1 < values.length && xs.length < MAX_POINTS; i += 2) {
@@ -213,12 +216,12 @@ function decodeData(data, meta, warnings) {
 }
 
 /** 一行混排的 ASCII 数字和 PAC（SQZ/DIF/DUP），返回绝对值序列。 */
-export function decodeLine(line) {
+export function decodeLine(line, limit = MAX_POINTS) {
   const values = [];
   let last = 0;
   let lastDif = 0;
   let i = 0;
-  while (i < line.length) {
+  while (i < line.length && values.length < limit) {
     const ch = line[i];
     if (ch === ' ' || ch === '\t' || ch === ',' || ch === ';') {
       i += 1;
@@ -253,7 +256,8 @@ export function decodeLine(line) {
       last += token.value;
       values.push(last);
     } else {
-      for (let extra = 1; extra < token.value; extra++) {
+      const repeats = Math.min(token.value - 1, limit - values.length);
+      for (let extra = 0; extra < repeats; extra++) {
         last += lastDif;
         values.push(last);
       }

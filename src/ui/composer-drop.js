@@ -138,11 +138,11 @@ export function installConversationPathDrop(mounted, getInput) {
     if (!area) { reset(); return; }
     const active = area.contains(event.target);
     showFrame(conversationFrameBounds(area, sessionId), active);
-    if (!desktop) return;
+    if (!desktop || !active) return;
     // The host also observes file drags on document. Use only the path drop feedback.
     event.preventDefault();
     event.stopImmediatePropagation();
-    event.dataTransfer.dropEffect = active ? 'copy' : 'none';
+    event.dataTransfer.dropEffect = 'copy';
   }
 
   function drop(event) {
@@ -150,10 +150,9 @@ export function installConversationPathDrop(mounted, getInput) {
     if (!isDesktopDrag(event)) return;
     const sessionId = mounted.getSnapshot();
     const area = conversationDropArea(sessionId)?.area;
-    if (!area) return;
+    if (!area?.contains(event.target)) return;
     event.preventDefault();
     event.stopImmediatePropagation();
-    if (!area.contains(event.target)) return;
     const files = event.dataTransfer?.files;
     const bridge = window.__DSH_HOST_PATHS__;
     const input = getInput(sessionId);

@@ -18,6 +18,7 @@ const maxMatches = 300;
 const maxText = 2 * 1024 * 1024;
 const maxBytes = 32 * 1024 * 1024;
 const maxFileOperations = 128;
+const driveCacheMs = 30_000;
 const invalidComponent = /[<>:"|?*\x00-\x1f]|[. ]$|^(?:CON|PRN|AUX|NUL|CONIN\$|CONOUT\$|COM[0-9¹²³]|LPT[0-9¹²³]) *(?:\.|$)/iu;
 
 // The official desktop shell forks dsh-desktop-host as a child process over IPC.
@@ -77,7 +78,15 @@ function pythonSourceEncoding(data) {
   return pythonEncodingAliases.get(label) ?? label;
 }
 
-function decodePreviewText(data, eof, encoding = 'utf-8') {
+function decodePreviewText(data, eof, encoding) {
+  if (!encoding) {
+    if (data.includes(0)) throw new BrowseError('此格式没有可用的文本预览');
+    try { return new TextDecoder('utf-8', { fatal: true }).decode(data, { stream: !eof }); }
+    catch {
+      try { return new TextDecoder('gb18030', { fatal: true }).decode(data, { stream: !eof }); }
+      catch { throw new BrowseError('无法按 UTF-8 或 GB18030 预览此文件'); }
+    }
+  }
   let decoder;
   try { decoder = new TextDecoder(encoding, { fatal: true }); }
   catch { decoder = new TextDecoder('utf-8', { fatal: true }); }
@@ -101,16 +110,18 @@ async function scanDrives() {
 }
 
 function createDiskAccess() {
-  let cachedDrives = [];
+  let cachedDrives;
   let expires = 0;
   let scanning;
   let cutProgress;
   async function drives(force = false) {
-    if (!force && Date.now() < expires) return cachedDrives;
+    if (!force && cachedDrives && Date.now() < expires) return cachedDrives;
     scanning ??= scanDrives().then(result => {
       cachedDrives = result;
-      expires = Date.now() + 5000;
+      expires = Date.now() + driveCacheMs;
       return result;
+    }).catch(() => {
+      throw new BrowseError('无法获取本机盘符，请检查 Windows PowerShell 是否可用', 503);
     }).finally(() => { scanning = undefined; });
     return scanning;
   }
@@ -373,7 +384,10 @@ function createDiskAccess() {
     try {
       const { results } = await windowsFileOperation({ action: 'recycle', sources: items.map(item => item.source) });
       recycled = items.filter((_, index) => results[index]);
-    } catch { /* The Shell can throw when recycling is refused. */ }
+    } catch (error) {
+      if (error?.code === 'ETIMEDOUT') throw error;
+      // The Shell can throw when recycling is refused.
+    }
     if (!recycled.length) throw new BrowseError('无法移入 Windows 回收站，请检查权限或回收站设置', 409);
     return {
       completed: recycled.length, failed: items.length - recycled.length,
@@ -530,7 +544,7 @@ function crossSiteRequest(request) {
   }
 }
 
-export function registerDesktopFiles(ctx) {
+export function registerDesktopFiles(ctx, getOfficeConverter = () => undefined) {
   const disks = createDiskAccess();
   registerPdfAssets(ctx);
   let writes = Promise.resolve();
@@ -622,13 +636,15 @@ export function registerDesktopFiles(ctx) {
           return json({ text: decodePreviewText(data, eof, python ? pythonSourceEncoding(data) : undefined), eof });
         }
         if (operation === 'bytes' || operation === 'office') {
-          const converter = operation === 'office' ? officeConverter(ctx) : undefined;
+          const converter = operation === 'office' ? getOfficeConverter() : undefined;
           if (operation === 'office' && !converter) return json({ error: '当前 DSH 未提供 Office 转换服务' }, 503);
           const data = converter
             ? await disks.renderOffice(input, signal, workspace, converter)
             : (await disks.read(input, maxBytes, signal, workspace)).data;
+          // Chromium can discard WAV responses served as generic binary data.
+          const type = converter ? 'application/pdf' : /\.wav$/i.test(input) ? 'audio/wav' : 'application/octet-stream';
           return new Response(data, { headers: {
-            'content-type': converter ? 'application/pdf' : 'application/octet-stream',
+            'content-type': type,
             'cache-control': 'no-store', 'x-content-type-options': 'nosniff',
           } });
         }
@@ -643,20 +659,7 @@ export function registerDesktopFiles(ctx) {
 
 function browseFailure(error) {
   if (error instanceof BrowseError) return json({ error: error.message }, error.status);
+  if (error?.code === 'ETIMEDOUT') return json({ error: error.message }, 504);
   const [message, status] = knownErrors[error?.code] ?? ['无法读取该位置', 500];
   return json({ error: message }, status);
 }
-
-// officeToPdf 是可选服务：cordis 4 里读一个没有 inject 的服务会直接抛
-// "cannot get property ... without inject"，所以统一走 ctx.get()，
-// 拿不到就交给上面的 503 分支，别让整条路由 500。
-function officeConverter(ctx) {
-  try {
-    if (typeof ctx.get === 'function') return ctx.get('officeToPdf');
-    return ctx.officeToPdf;
-  } catch {
-    return undefined;
-  }
-}
-
-

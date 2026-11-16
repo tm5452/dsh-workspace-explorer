@@ -183,14 +183,14 @@ export function Preview({ file, root, openImmediately = false, confirmed = openI
         videoType, autoPlay: Boolean(videoType),
       });
     case 'pdf':
-      return h(PdfPreview, { data: result.data });
+      return h(PdfPreview, { data: result.data, standalone: openImmediately });
     case 'image':
       return h(ImagePreview, {
         url: result.url, name: file.name,
         onError: () => setResult({ kind: 'unavailable' }),
       });
     case 'text':
-      return h(TextPreview, { text: result.text, eof: result.eof, file });
+      return h(TextPreview, { key: file.line ?? 0, text: result.text, eof: result.eof, file });
     case 'unavailable':
       return h(PreviewUnavailable, { standalone: openImmediately });
     default:

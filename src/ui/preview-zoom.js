@@ -96,6 +96,11 @@ export function useImageViewport(viewport) {
     let y = 0;
 
     function setOffset() {
+      const image = element.firstElementChild;
+      const limitX = Math.max(0, ((image?.offsetWidth ?? 0) - element.clientWidth) / 2);
+      const limitY = Math.max(0, ((image?.offsetHeight ?? 0) - element.clientHeight) / 2);
+      x = Math.max(-limitX, Math.min(limitX, x));
+      y = Math.max(-limitY, Math.min(limitY, y));
       element.style.setProperty('--dwe-image-x', x + 'px');
       element.style.setProperty('--dwe-image-y', y + 'px');
     }
@@ -113,15 +118,19 @@ export function useImageViewport(viewport) {
       y += (event.clientY - top - height / 2 - y) * (1 - ratio);
       zoom = next;
       element.style.setProperty('--dwe-preview-zoom', zoom);
+      element.toggleAttribute('data-dwe-pan-ready', zoom > 1);
       setOffset();
     }
 
     element.addEventListener('wheel', wheel, { passive: false, signal });
-    installPointerPan(element, signal, () => true, (dx, dy) => {
+    const observer = new ResizeObserver(setOffset);
+    observer.observe(element);
+    if (element.firstElementChild) observer.observe(element.firstElementChild);
+    installPointerPan(element, signal, () => zoom > 1, (dx, dy) => {
       x += dx;
       y += dy;
       setOffset();
     });
-    return () => controller.abort();
+    return () => { controller.abort(); observer.disconnect(); };
   }, [viewport]);
 }
