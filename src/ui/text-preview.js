@@ -1,4 +1,8 @@
-const { createElement: h, useLayoutEffect, useMemo, useRef, useState } = react;
+import { disks } from './workspace.js';
+import { PreviewUnavailable } from './preview-unavailable.js';
+import { previewTopInset } from './preview-zoom.js';
+
+const { createElement: h, useEffect, useLayoutEffect, useMemo, useRef, useState } = react;
 const chunkSize = 2048;
 const maxLines = 32;
 const lineHeight = 18.6;
@@ -40,7 +44,7 @@ function chunkAt(offsets, position) {
   return from;
 }
 
-export function TextPreview({ text, eof, file }) {
+function TextPreview({ text, eof, file, onReachEnd }) {
   const viewport = useRef(null);
   const heightCache = useRef(new Map());
   const pendingLine = useRef(null);
@@ -120,16 +124,59 @@ export function TextPreview({ text, eof, file }) {
       range.setStart(row.firstChild, Math.min(offset, chunk.value.length));
       range.collapse(true);
       const lineTop = range.getClientRects().length ? range.getBoundingClientRect().top : row.getBoundingClientRect().top;
-      node.scrollTop += lineTop - node.getBoundingClientRect().top - padding;
+      node.scrollTop += lineTop - node.getBoundingClientRect().top - padding - previewTopInset(node);
       setTop(node.scrollTop);
     }
   }, [chunks, first, last, offsets, file.line]);
 
   return h('div', { ref: viewport, className: 'dwe-text', tabIndex: 0, 'aria-label': '文本预览',
-    onScroll: event => setTop(event.currentTarget.scrollTop),
+    onScroll: event => {
+      const node = event.currentTarget;
+      setTop(node.scrollTop);
+      if (node.scrollTop > top && node.scrollTop + node.clientHeight >= node.scrollHeight - 4) onReachEnd?.();
+    },
   }, h('div', { style: { height: offsets[first] }, 'aria-hidden': true }),
   ...chunks.slice(first, last).map((chunk, index) => h('div', { key: first + index, 'data-text-chunk': first + index },
     !chunk.value || chunk.value.endsWith('\n') ? chunk.value + '\u200b' : chunk.value)),
   h('div', { style: { height: offsets.at(-1) - offsets[last] }, 'aria-hidden': true }),
   !eof && h('p', { className: 'dwe-text-limit' }, '… 仅显示文件开头，可在原生预览中继续查看'));
+}
+
+export function TextFilePreview({ file, root, standalone }) {
+  const [cursors, setCursors] = useState([null]);
+  const [index, setIndex] = useState(0);
+  const [result, setResult] = useState(null);
+  const cursor = cursors[index];
+  const page = result?.cursor === cursor ? result.page : undefined;
+  const failed = result?.cursor === cursor && !page;
+  useEffect(() => {
+    const controller = new AbortController();
+    const { signal } = controller;
+    void disks.readTextWindow(file.absolute, signal, root, cursor, cursor ? undefined : file.line).then(data => {
+      if (!signal.aborted) setResult({ cursor, page: data });
+    }, () => {
+      if (!signal.aborted) setResult({ cursor, page: null });
+    });
+    return () => controller.abort();
+  }, [file.absolute, file.line, root, cursor]);
+
+  function next() {
+    if (!page?.next) return;
+    setCursors(previous => {
+      const known = previous[index + 1];
+      return known?.version === page.next.version && known.offset === page.next.offset
+        ? previous : [...previous.slice(0, index + 1), page.next];
+    });
+    setIndex(index + 1);
+  }
+
+  return h('div', { className: 'dwe-text-file' },
+    page ? h(TextPreview, {
+      key: index, text: page.text, eof: page.eof ?? true, file: page.legacy ? file : {},
+      onReachEnd: next,
+    }) : failed ? h(PreviewUnavailable, { standalone })
+      : h('p', { className: 'dwe-preview-hint', role: 'status' }, '正在读取文本…'),
+    (index > 0 || page?.next) && h('div', { className: 'dwe-text-pages', 'aria-label': '文本分段' },
+      h('button', { type: 'button', disabled: !index, onClick: () => setIndex(index - 1) }, '上一段'),
+      h('button', { type: 'button', disabled: !page?.next, onClick: next }, '下一段')));
 }

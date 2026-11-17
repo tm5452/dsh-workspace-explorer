@@ -2,11 +2,15 @@ import { PREVIEW_IDS, previewBodies, previewDefinitions } from '../vendor/ui/vie
 import { officeExtensions } from '../document-types.js';
 import { thumbnailType } from '../thumbnail-types.js';
 import { disks } from './workspace.js';
-import { makeThumbnail } from './thumbnail.js';
 import { PreviewUnavailable } from './preview-unavailable.js';
 import { PdfPreview } from './pdf-preview.js';
-import { useImageViewport } from './preview-zoom.js';
-import { TextPreview } from './text-preview.js';
+import { useMediaViewport } from './preview-zoom.js';
+import { TextFilePreview } from './text-preview.js';
+import { formatSize } from './file-size.js';
+import { VideoPreview } from './video-preview.js';
+import { MusicPreview } from './music-preview.js';
+import { audioType } from '../audio-types.js';
+import { fileIcon } from './file-icon.js';
 
 const { createElement: h, useEffect, useRef, useState } = react;
 const coverActions = {
@@ -22,14 +26,6 @@ const coverActions = {
   [PREVIEW_IDS.dfu]: '查看固件',
 };
 
-export function formatSize(bytes) {
-  if (typeof bytes !== 'number') return '—';
-  if (bytes < 1024) return bytes + ' B';
-  if (bytes < 1024 ** 2) return (bytes / 1024).toFixed(1) + ' KB';
-  if (bytes < 1024 ** 3) return (bytes / 1024 ** 2).toFixed(1) + ' MB';
-  return (bytes / 1024 ** 3).toFixed(1) + ' GB';
-}
-
 export class PreviewBoundary extends react.Component {
   state = { failed: false };
 
@@ -42,8 +38,7 @@ export class PreviewBoundary extends react.Component {
   }
 }
 
-function PreviewCover({ file, root, videoType, label, archive, start }) {
-  const [poster, setPoster] = useState(null);
+function PreviewCover({ file, root, label, start }) {
   const [resolvedSize, setResolvedSize] = useState(undefined);
   const { absolute, name, size } = file;
 
@@ -56,34 +51,14 @@ function PreviewCover({ file, root, videoType, label, archive, start }) {
     return () => controller.abort();
   }, [absolute, size, root]);
 
-  useEffect(() => {
-    if (!videoType) return;
-    const controller = new AbortController();
-    const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(4000)]);
-    void makeThumbnail(file.absolute, videoType, signal, root, true).then(image => {
-      if (!signal.aborted) setPoster(image);
-    }, () => {});
-    return () => controller.abort();
-  }, [file, root, videoType]);
-
-  const fileIcon = archive
-    ? h('svg', { width: 36, height: 36, viewBox: '0 0 36 36', 'aria-hidden': true },
-      h('rect', { x: 5, y: 3, width: 26, height: 30, rx: 5, fill: '#7462c4' }),
-      h('path', { d: 'M18 5h3v4h-3v4h3v4h-3v4m-2 0h6v6h-6z', fill: 'none', stroke: '#fff', strokeWidth: 1.6, strokeLinejoin: 'round' }))
-    : h(primitives.FileTypeIcon, { path: file.name, size: 36 });
-  return h('div', {
-    className: 'dwe-preview-cover', 'data-video': Boolean(videoType) || undefined,
-    'data-poster': Boolean(poster) || undefined,
-  },
-    poster && h('img', { src: poster, alt: '', draggable: false }),
+  return h('div', { className: 'dwe-preview-cover' },
     h('div', { className: 'dwe-cover-content' },
       h('div', { className: 'dwe-cover-action' },
-        !videoType && fileIcon,
+        fileIcon(file.name, 'file', 36),
         h('button', {
-          type: 'button', className: videoType ? 'dwe-cover-play' : 'dwe-cover-open',
+          type: 'button', className: 'dwe-cover-open',
           title: label, 'aria-label': label, onClick: start,
-        }, videoType ? h('svg', { width: 24, height: 24, viewBox: '0 0 24 24', 'aria-hidden': true },
-          h('path', { d: 'M9 5v14l11-7z', fill: 'currentColor' })) : label)),
+        }, label)),
       h('div', { className: 'dwe-cover-details' },
         h('div', { className: 'dwe-cover-file', title: name }, name),
         h('div', { className: 'dwe-cover-size' }, formatSize(size ?? resolvedSize)))));
@@ -91,70 +66,63 @@ function PreviewCover({ file, root, videoType, label, archive, start }) {
 
 function ImagePreview({ url, name, onError }) {
   const scroll = useRef(null);
-  const [size, setSize] = useState(null);
-  const [viewport, setViewport] = useState({ width: 0, height: 0 });
-  useImageViewport(scroll);
-  useEffect(() => {
-    const element = scroll.current;
-    const observer = new ResizeObserver(() => {
-      const width = element.offsetWidth;
-      const height = element.offsetHeight;
-      setViewport(current => current.width === width && current.height === height ? current : { width, height });
-    });
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, []);
-  const width = size ? Math.min(size.width, viewport.width, viewport.height * size.width / size.height) : 0;
+  useMediaViewport(scroll);
   return h('div', { className: 'dwe-image-scroll', ref: scroll, tabIndex: 0, 'aria-label': '图片预览' },
     h('img', {
       className: 'dwe-image', src: url, alt: name, draggable: false, 'data-dwe-zoom-surface': '',
-      style: { '--dwe-fit-width': width + 'px' },
-      onLoad: event => setSize({ width: event.currentTarget.naturalWidth, height: event.currentTarget.naturalHeight }),
       onError,
     }));
 }
 
-export function Preview({ file, root, openImmediately = false, confirmed = openImmediately, onConfirm }) {
-  const [result, setResult] = useState({ kind: 'loading' });
+export function Preview({ file, root, openImmediately = false, confirmed = openImmediately, onConfirm, onMinimize, onRestore, minimizeHost }) {
   const dot = file.name.lastIndexOf('.');
   const extension = dot > 0 ? file.name.slice(dot + 1).toLowerCase() : '';
+  const mediaType = thumbnailType(file.name);
+  if (mediaType?.startsWith('video/')) {
+    return h(VideoPreview, { file, root, mime: mediaType, confirmed, openImmediately, onConfirm });
+  }
+  const audio = audioType(file.name);
+  if (audio) {
+    return h(MusicPreview, { file, root, mime: audio, onMinimize, onRestore, minimizeHost });
+  }
+  return h(FilePreview, { file, root, openImmediately, confirmed, onConfirm, extension, mime: mediaType });
+}
+
+function FilePreview({ file, root, openImmediately, confirmed, onConfirm, extension, mime }) {
+  const [result, setResult] = useState({ kind: 'loading' });
   const isHtml = extension === 'html' || extension === 'htm';
   const definition = previewDefinitions.find(entry => entry.extensions.includes(extension));
   const isDocument = extension === 'pdf' || officeExtensions.has(extension);
-  const mediaType = thumbnailType(file.name);
-  const mime = mediaType?.startsWith('image/') ? mediaType : undefined;
-  const videoType = mediaType?.startsWith('video/') ? mediaType : undefined;
-  const Body = previewBodies[videoType ? PREVIEW_IDS.media : definition?.id];
-  const isAudio = definition?.id === PREVIEW_IDS.media && !videoType;
-  const waiting = Boolean(isHtml || isDocument || videoType || (Body && !isAudio)) && !confirmed;
+  const Body = previewBodies[definition?.id];
+  const waiting = Boolean(isHtml || isDocument || Body) && !confirmed;
+  const isText = !isHtml && !isDocument && !Body && !mime;
 
   useEffect(() => {
-    if (waiting) return;
+    if (waiting || isText) return;
     const controller = new AbortController();
     const signal = controller.signal;
     let objectUrl;
+    let previewTicket;
     async function load() {
       try {
-        if (isHtml || Body || mime) {
+        if (isHtml || Body) {
           const data = await disks.readBytes(file.absolute, signal, root);
           if (signal.aborted) return;
           if (isHtml) {
             objectUrl = URL.createObjectURL(new Blob([data], { type: 'text/html' }));
             setResult({ kind: 'html', url: objectUrl });
-          } else if (Body) {
-            setResult({ kind: 'vendor', Body, data });
           } else {
-            objectUrl = URL.createObjectURL(new Blob([data], { type: mime }));
-            setResult({ kind: 'image', url: objectUrl });
+            setResult({ kind: 'vendor', Body, data });
           }
-        } else if (isDocument) {
-          const read = extension === 'pdf' ? disks.readBytes : disks.renderOffice;
-          const data = await read(file.absolute, signal, root);
-          if (!signal.aborted) setResult({ kind: 'pdf', data });
         } else {
-          const { text, eof } = await disks.read(file.absolute, signal, root);
-          if (signal.aborted) return;
-          setResult({ kind: 'text', text, eof });
+          const read = isDocument ? disks.documentPreview : disks.imagePreview;
+          const source = await read(file.absolute, signal, root);
+          if (signal.aborted) {
+            void disks.releasePreview(source.ticket);
+            return;
+          }
+          previewTicket = source.ticket;
+          setResult({ kind: isDocument ? 'pdf' : 'image', source });
         }
       } catch {
         if (!signal.aborted) setResult({ kind: 'unavailable' });
@@ -164,12 +132,16 @@ export function Preview({ file, root, openImmediately = false, confirmed = openI
     return () => {
       controller.abort();
       if (objectUrl) URL.revokeObjectURL(objectUrl);
+      if (previewTicket) void disks.releasePreview(previewTicket);
     };
-  }, [file, root, waiting, Body, mime, extension, isDocument, isHtml]);
+  }, [file.absolute, root, waiting, Body, isDocument, isHtml, isText]);
 
-  if (waiting || (!confirmed && !mime && !Body && result.kind === 'unavailable')) {
-    const label = isHtml ? '打开网页预览' : videoType ? '播放视频' : isDocument ? '查看文档' : coverActions[definition?.id] ?? '查看预览';
-    return h(PreviewCover, { file, root, videoType, label, archive: definition?.id === PREVIEW_IDS.archive, start: onConfirm });
+  if (isText) return h(TextFilePreview, {
+    key: JSON.stringify([file.absolute, file.line, root]), file, root, standalone: openImmediately,
+  });
+  if (waiting) {
+    const label = isHtml ? '打开网页预览' : isDocument ? '查看文档' : coverActions[definition?.id] ?? '查看预览';
+    return h(PreviewCover, { file, root, label, start: onConfirm });
   }
   switch (result.kind) {
     case 'html':
@@ -180,17 +152,14 @@ export function Preview({ file, root, openImmediately = false, confirmed = openI
     case 'vendor':
       return h(result.Body, {
         content: { kind: 'bytes', data: result.data }, resourceAddress: file.address, wrap: true,
-        videoType, autoPlay: Boolean(videoType),
       });
     case 'pdf':
-      return h(PdfPreview, { data: result.data, standalone: openImmediately });
+      return h(PdfPreview, { source: result.source, standalone: openImmediately });
     case 'image':
       return h(ImagePreview, {
-        url: result.url, name: file.name,
+        url: result.source.url, name: file.name,
         onError: () => setResult({ kind: 'unavailable' }),
       });
-    case 'text':
-      return h(TextPreview, { key: file.line ?? 0, text: result.text, eof: result.eof, file });
     case 'unavailable':
       return h(PreviewUnavailable, { standalone: openImmediately });
     default:

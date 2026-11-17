@@ -6,6 +6,7 @@ import { Readable } from 'node:stream';
 import { promisify } from 'node:util';
 import { officeExtensions } from '../document-types.js';
 import { thumbnailType } from '../thumbnail-types.js';
+import { audioType } from '../audio-types.js';
 import { underPath } from '../ui/navigation.js';
 import { registerPdfAssets } from './pdf-assets.js';
 import { windowsFileOperation } from './shell-files.js';
@@ -16,6 +17,7 @@ const thumbnailEndpoint = endpoint + '/thumbnail';
 const maxEntries = 2000;
 const maxMatches = 300;
 const maxText = 2 * 1024 * 1024;
+const textWindowBytes = 128 * 1024;
 const maxBytes = 32 * 1024 * 1024;
 const maxFileOperations = 128;
 const driveCacheMs = 30_000;
@@ -98,6 +100,53 @@ function decodePreviewText(data, eof, encoding) {
   }
   if (text.includes('\0')) throw new BrowseError('此格式没有可用的文本预览');
   return text;
+}
+
+async function readAt(handle, buffer, position, signal) {
+  let length = 0;
+  while (length < buffer.length) {
+    signal.throwIfAborted();
+    const { bytesRead } = await handle.read(buffer, length, buffer.length - length, position + length);
+    if (!bytesRead) break;
+    length += bytesRead;
+  }
+  return buffer.subarray(0, length);
+}
+
+async function textLineOffset(handle, line, size, signal) {
+  const buffer = Buffer.allocUnsafe(textWindowBytes);
+  let position = 0;
+  let lastStart = 0;
+  while (line > 1 && position < size) {
+    const data = await readAt(handle, buffer, position, signal);
+    if (!data.length) break;
+    let newline = data.indexOf(10);
+    while (newline >= 0) {
+      lastStart = position + newline + 1;
+      if (--line === 1) return lastStart;
+      newline = data.indexOf(10, newline + 1);
+    }
+    position += data.length;
+  }
+  return lastStart;
+}
+
+function decodeTextWindow(data, labels, offset, eof) {
+  if (data.includes(0)) throw new BrowseError('此格式没有可用的文本预览');
+  for (const label of labels) {
+    let decoder;
+    try { decoder = new TextDecoder(label, { fatal: true, ignoreBOM: offset > 0 }); }
+    catch { continue; }
+    if (label === 'latin1') return { text: data.toString('latin1'), length: data.length, encoding: label };
+    // Keep an incomplete multibyte character for the next window.
+    for (let tail = 0; tail <= (eof ? 0 : Math.min(4, data.length - 1)); tail++) {
+      const length = data.length - tail;
+      try {
+        return { text: decoder.decode(data.subarray(0, length)), length, encoding: decoder.encoding };
+      } catch { /* Try the remaining character boundaries or the fallback encoding. */ }
+    }
+  }
+  throw new BrowseError('此文件没有可用的文本编码');
 }
 
 async function scanDrives() {
@@ -270,7 +319,7 @@ function createDiskAccess() {
     const target = await resolve(input, signal, workspace);
     const info = await stat(target);
     if (!info.isFile()) throw new BrowseError('只能预览普通文件');
-    if (limit === maxBytes && info.size > limit) throw new BrowseError('文件超过 32 MB 读取上限', 413);
+    if (!version && limit === maxBytes && info.size > limit) throw new BrowseError('文件超过 32 MB 读取上限', 413);
     const handle = await open(target, 'r');
     try {
       const opened = await handle.stat();
@@ -287,7 +336,7 @@ function createDiskAccess() {
         length += bytesRead;
       }
       const eof = length <= limit && length <= opened.size;
-      if (limit === maxBytes && (!eof || opened.size > limit)) throw new BrowseError('文件超过 32 MB 读取上限', 413);
+      if (!version && limit === maxBytes && (!eof || opened.size > limit)) throw new BrowseError('文件超过 32 MB 读取上限', 413);
       if (version && (!eof || fileVersion(await handle.stat()) !== version)) {
         throw new BrowseError('文件已改变，请重新预览', 409);
       }
@@ -304,7 +353,6 @@ function createDiskAccess() {
     const target = await resolve(absolute, signal, workspace);
     const info = await stat(target);
     if (!info.isFile()) throw new BrowseError('只能预览普通文件');
-    if (info.size > maxBytes) throw new BrowseError('文件超过 32 MB 读取上限', 413);
     const version = fileVersion(info);
     const result = await converter.convert({
       extension, priority: 'foreground',
@@ -312,7 +360,8 @@ function createDiskAccess() {
         key: JSON.stringify(['dsh-workspace-explorer', workspace?.nativeRoot, target]),
         version, bytes: info.size,
         read: async (readSignal, budget) => {
-          const { data } = await read(absolute, Math.min(budget, maxBytes), readSignal, workspace, { version });
+          if (!Number.isSafeInteger(budget) || budget < info.size) throw new BrowseError('文件超过 DSH Office 转换器的输入上限', 413);
+          const { data } = await read(absolute, info.size, readSignal, workspace, { version });
           return { bytes: data, version };
         },
       },
@@ -320,12 +369,54 @@ function createDiskAccess() {
     return result.pdf;
   }
 
-  async function locate(input, signal, workspace) {
+  async function readTextWindow(input, signal, workspace, cursor, line) {
+    const target = await resolve(input, signal, workspace);
+    if (!(await stat(target)).isFile()) throw new BrowseError('只能预览普通文件');
+    const handle = await open(target, 'r');
+    try {
+      const info = await handle.stat();
+      if (!info.isFile()) throw new BrowseError('只能预览普通文件');
+      const version = fileVersion(info);
+      if (cursor && (cursor.version !== version || !Number.isSafeInteger(cursor.offset) ||
+          cursor.offset <= 0 || cursor.offset >= info.size || typeof cursor.encoding !== 'string')) {
+        throw new BrowseError('文本已更新，请重新预览', 409);
+      }
+      const python = /\.py$/i.test(input);
+      let declared = python && (cursor?.encoding ??
+        pythonSourceEncoding(await readAt(handle, Buffer.allocUnsafe(4096), 0, signal)));
+      if (declared && declared !== 'latin1') {
+        try { declared = new TextDecoder(declared).encoding; }
+        catch { declared = 'utf-8'; }
+      }
+      if (declared && /^(?:utf-16[bl]e|iso-2022-jp)$/.test(declared)) {
+        const data = await readAt(handle, Buffer.allocUnsafe(Math.min(info.size, maxText)), 0, signal);
+        const eof = data.length >= info.size;
+        return { text: decodePreviewText(data, eof, declared), eof, legacy: true, next: null };
+      }
+      const offset = cursor?.offset ?? (Number.isSafeInteger(line) && line > 1
+        ? await textLineOffset(handle, line, info.size, signal) : 0);
+      let data = await readAt(handle, Buffer.allocUnsafe(Math.min(textWindowBytes, info.size - offset)), offset, signal);
+      if (offset + data.length < info.size) {
+        const newline = data.lastIndexOf(10);
+        if (newline > data.length / 2) data = data.subarray(0, newline + 1);
+      }
+      const labels = declared ? [declared] : cursor?.encoding === 'gb18030' ? ['gb18030'] : ['utf-8', 'gb18030'];
+      const { text, length, encoding } = decodeTextWindow(data, labels, offset, offset + data.length >= info.size);
+      if (fileVersion(await handle.stat()) !== version) throw new BrowseError('文本已更新，请重新预览', 409);
+      const next = offset + length;
+      return { text, next: next < info.size ? { offset: next, encoding, version } : null };
+    } finally {
+      await handle.close();
+    }
+  }
+
+  async function locate(input, signal, workspace, includeVersion = false) {
     const absolute = normalizeLocalPath(input);
     const target = await resolve(absolute, signal, workspace);
     const info = await stat(target);
     if (info.isDirectory()) return { path: absolute, nativePath: target, type: 'directory' };
-    if (info.isFile()) return { path: absolute, nativePath: target, type: 'file', name: path.basename(absolute), size: info.size };
+    if (info.isFile()) return { path: absolute, nativePath: target, type: 'file', name: path.basename(absolute),
+      size: info.size, ...(includeVersion ? { version: fileVersion(info) } : {}) };
     throw new BrowseError('该路径不指向普通文件或文件夹');
   }
 
@@ -459,15 +550,17 @@ function createDiskAccess() {
     };
   }
 
-  async function thumbnail(input, type, request, workspace) {
+  async function thumbnail(input, type, request, workspace, { version, preview } = {}) {
     const target = await resolve(input, request.signal, workspace);
     const info = await stat(target);
     if (!info.isFile()) throw new BrowseError('只能读取普通文件');
     const file = await open(target, 'r');
     let streaming = false;
     try {
-      const { size } = await file.stat();
-      if (type.startsWith('image/') && size > 64 * 1024 * 1024) {
+      const opened = await file.stat();
+      const { size } = opened;
+      if (version && fileVersion(opened) !== version) throw new BrowseError('文件已改变，请重新预览', 409);
+      if (!preview && type.startsWith('image/') && size > 64 * 1024 * 1024) {
         throw new BrowseError('图片超过缩略图读取上限', 413);
       }
       const headers = {
@@ -494,7 +587,7 @@ function createDiskAccess() {
     }
   }
 
-  return { list, read, renderOffice, locate, thumbnail, stage, rename, paste, recycle, scope, search };
+  return { list, read, readTextWindow, renderOffice, locate, thumbnail, stage, rename, paste, recycle, scope, search };
 }
 
 function byteRange(value, size) {
@@ -554,6 +647,27 @@ export function registerDesktopFiles(ctx, getOfficeConverter = () => undefined) 
     return result;
   }
   const tickets = new Map();
+  const playbackTickets = new Map();
+  const previewTickets = new Map();
+  const playbackLifetime = 2 * 60 * 60 * 1000;
+  const previewBytesBudget = 128 * 1024 * 1024;
+
+  function registerPreview(ticket) {
+    const now = Date.now();
+    for (const [key, value] of previewTickets) if (value.expires <= now) previewTickets.delete(key);
+    let bytes = [...previewTickets.values()].reduce((sum, value) => sum + (value.data?.length ?? 0), 0);
+    for (const [key, value] of previewTickets) {
+      if (bytes + (ticket.data?.length ?? 0) <= previewBytesBudget) break;
+      if (!value.data) continue;
+      previewTickets.delete(key);
+      bytes -= value.data.length;
+    }
+    if (previewTickets.size >= 64) previewTickets.delete(previewTickets.keys().next().value);
+    const key = randomUUID();
+    previewTickets.set(key, { ...ticket, expires: now + playbackLifetime });
+    return { ticket: key, url: thumbnailEndpoint + '?ticket=' + key, size: ticket.size };
+  }
+
   ctx.connection.fetch.register({
     path: thumbnailEndpoint,
     methods: ['GET', 'HEAD'],
@@ -563,13 +677,38 @@ export function registerDesktopFiles(ctx, getOfficeConverter = () => undefined) 
       // cross-site origin. Media elements use a short-lived ticket because they
       // cannot set our POST header.
       const token = new URL(request.url).searchParams.get('ticket');
-      const ticket = tickets.get(token);
-      if (crossSiteRequest(request) || !ticket || ticket.expires <= Date.now()) {
+      const playback = playbackTickets.get(token);
+      const preview = previewTickets.get(token);
+      const ticket = preview ?? playback ?? tickets.get(token);
+      const now = Date.now();
+      if (crossSiteRequest(request) || !ticket || ticket.expires <= now) {
         return json({ error: '缩略图链接已失效' }, 403);
       }
       try {
         const workspace = ticket.workspace && await disks.scope(ticket.workspace, request.signal);
-        return await disks.thumbnail(ticket.path, ticket.type, request, workspace);
+        let response;
+        if (ticket.data) {
+          const { data } = ticket;
+          const range = byteRange(request.headers.get('range') ?? '', data.length);
+          const headers = {
+            'accept-ranges': 'bytes', 'cache-control': 'no-store', 'content-type': ticket.type,
+            'x-content-type-options': 'nosniff', 'cross-origin-resource-policy': 'same-origin',
+          };
+          if (!range) return new Response(null, { status: 416, headers: { ...headers, 'content-range': 'bytes */' + data.length } });
+          const { start, end } = range;
+          headers['content-range'] = 'bytes ' + start + '-' + end + '/' + data.length;
+          headers['content-length'] = String(end - start + 1);
+          response = new Response(request.method === 'HEAD' ? null : data.subarray(start, end + 1), { status: 206, headers });
+        } else {
+          response = await disks.thumbnail(ticket.path, ticket.type, request, workspace, { version: ticket.version, preview: Boolean(preview) });
+        }
+        if (preview && response.ok) preview.expires = Date.now() + playbackLifetime;
+        if (playback && response.ok && playbackTickets.get(token) === ticket) {
+          ticket.expires = Date.now() + playbackLifetime;
+          playbackTickets.delete(token);
+          playbackTickets.set(token, ticket);
+        }
+        return response;
       } catch (error) {
         return browseFailure(error);
       }
@@ -591,13 +730,38 @@ export function registerDesktopFiles(ctx, getOfficeConverter = () => undefined) 
       try {
         const body = await request.text();
         if (body.length > 65536) throw new BrowseError('路径过长', 413);
-        const { operation, path: input, name, query, workspace: root } = JSON.parse(body) ?? {};
+        const { operation, path: input, name, query, workspace: root, cursor, line } = JSON.parse(body) ?? {};
         const signal = request.signal;
+        if (operation === 'release-preview') {
+          previewTickets.delete(input);
+          return json({ ok: true });
+        }
         if (operation === 'search') return json(await disks.search(await disks.scope(input, signal), query, signal));
         // Thumbnail tickets recheck the workspace when the file is streamed.
-        const workspace = root === undefined || operation === 'thumbnail' ? undefined : await disks.scope(root, signal);
+        const usesTicket = operation === 'thumbnail' || operation === 'playback';
+        const workspace = root === undefined || usesTicket ? undefined : await disks.scope(root, signal);
         if (operation === 'list') return json(await disks.list(input, signal, workspace));
         if (operation === 'locate') return json(await disks.locate(input, signal, workspace));
+        if (operation === 'document-preview' || operation === 'image-preview') {
+          const path = normalizeLocalPath(input);
+          const extension = path.slice(path.lastIndexOf('.') + 1).toLowerCase();
+          const image = operation === 'image-preview';
+          const type = image ? thumbnailType(path) : 'application/pdf';
+          if (image ? !type?.startsWith('image/') : extension !== 'pdf' && !officeExtensions.has(extension)) {
+            throw new BrowseError('此文件类型没有可用的预览');
+          }
+          if (!image && extension !== 'pdf') {
+            const converter = getOfficeConverter();
+            if (!converter) return json({ error: '当前 DSH 未提供 Office 转换服务' }, 503);
+            const data = await disks.renderOffice(input, signal, workspace, converter);
+            signal.throwIfAborted();
+            return json(registerPreview({ path, data, type, size: data.length, workspace: workspace?.root }));
+          }
+          const file = await disks.locate(path, signal, workspace, true);
+          if (file.type !== 'file') throw new BrowseError('只能预览普通文件');
+          signal.throwIfAborted();
+          return json(registerPreview({ path, type, size: file.size, version: file.version, workspace: workspace?.root }));
+        }
         const modify = (action, inputs = [input]) => write(async () => {
           if (workspace) {
             for (const input of inputs) {
@@ -619,17 +783,24 @@ export function registerDesktopFiles(ctx, getOfficeConverter = () => undefined) 
           const inputs = operationPaths(input);
           return json(await modify(() => disks.recycle(inputs, signal), inputs));
         }
-        if (operation === 'thumbnail') {
+        if (usesTicket) {
           const path = normalizeLocalPath(input);
-          const type = thumbnailType(path);
-          if (!type) throw new BrowseError('此文件类型没有缩略图');
+          const thumbnail = thumbnailType(path);
+          const playback = operation === 'playback';
+          const type = playback ? audioType(path) ?? thumbnail : thumbnail;
+          if (!type || (playback && type.startsWith('image/'))) throw new BrowseError('此文件类型没有预览媒体');
+          const pool = playback ? playbackTickets : tickets;
           const now = Date.now();
-          for (const [key, ticket] of tickets) if (ticket.expires <= now) tickets.delete(key);
-          if (tickets.size >= 128) tickets.delete(tickets.keys().next().value);
+          for (const [key, ticket] of pool) if (ticket.expires <= now) pool.delete(key);
+          if (pool.size >= (playback ? 32 : 128)) pool.delete(pool.keys().next().value);
           const token = randomUUID();
-          tickets.set(token, { path, type, workspace: root === undefined ? undefined : normalizeLocalPath(root), expires: now + 30_000 });
+          pool.set(token, {
+            path, type, workspace: root === undefined ? undefined : normalizeLocalPath(root),
+            expires: now + (playback ? playbackLifetime : 30_000),
+          });
           return json({ url: thumbnailEndpoint + '?ticket=' + token });
         }
+        if (operation === 'text-window') return json(await disks.readTextWindow(input, signal, workspace, cursor, line));
         if (operation === 'text') {
           const python = typeof input === 'string' && /\.py$/i.test(input);
           const { data, eof } = await disks.read(input, maxText, signal, workspace, { sniffText: !python });
@@ -641,8 +812,10 @@ export function registerDesktopFiles(ctx, getOfficeConverter = () => undefined) 
           const data = converter
             ? await disks.renderOffice(input, signal, workspace, converter)
             : (await disks.read(input, maxBytes, signal, workspace)).data;
-          // Chromium can discard WAV responses served as generic binary data.
-          const type = converter ? 'application/pdf' : /\.wav$/i.test(input) ? 'audio/wav' : 'application/octet-stream';
+          // Chromium may discard media responses without their MIME type.
+          const videoType = thumbnailType(input);
+          const type = converter ? 'application/pdf'
+            : audioType(input) ?? (videoType?.startsWith('video/') ? videoType : 'application/octet-stream');
           return new Response(data, { headers: {
             'content-type': type,
             'cache-control': 'no-store', 'x-content-type-options': 'nosniff',

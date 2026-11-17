@@ -1,3 +1,5 @@
+import { mountIcon } from '../ui/interface-icon.js';
+
 const dragDistance = 6;
 const sampleDistance = 2;
 const minimumStraightness = 0.75;
@@ -8,6 +10,7 @@ const feedbackDelay = 450;
 const recognitionDelay = 34;
 const trackingAttribute = 'data-dwe-mouse-gesture-tracking';
 const labels = { left: '后退', right: '前进', up: '返回上一级', invalid: '无效手势' };
+const actionIcons = { left: 'back', right: 'forward', up: 'up', invalid: 'gesture-invalid' };
 
 function recordPoint(gesture, { clientX: x, clientY: y, timeStamp }) {
   // Pointer and compatibility mouse events may report the same samples.
@@ -51,11 +54,11 @@ function createFeedback(getBadgeBounds) {
   overlay.innerHTML = [
     '<svg class="dwe-mouse-gesture-trail"><polyline /></svg>',
     '<div class="dwe-mouse-gesture-badge">',
-    '<svg viewBox="0 0 24 24"><path /></svg><span></span>',
+    '<svg fill="none"></svg><span></span>',
     '</div>',
   ].join('');
   const trail = overlay.querySelector('polyline');
-  const icon = overlay.querySelector('.dwe-mouse-gesture-badge path');
+  const icon = overlay.querySelector('.dwe-mouse-gesture-badge svg');
   const label = overlay.querySelector('span');
   let timer;
   let frame;
@@ -105,7 +108,7 @@ function createFeedback(getBadgeBounds) {
     overlay.style.setProperty('--dwe-gesture-badge-x', bounds.left + bounds.width / 2 + 'px');
     overlay.style.setProperty('--dwe-gesture-badge-y', bounds.top + bounds.height / 2 + 'px');
     overlay.dataset.action = action;
-    icon.setAttribute('d', action === 'invalid' ? 'M6 6l12 12M18 6 6 18' : 'M5 12h14m-6-6 6 6-6 6');
+    mountIcon(icon, actionIcons[action]);
     label.textContent = labels[action];
   }
 

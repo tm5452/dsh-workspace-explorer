@@ -1,5 +1,6 @@
 import { thumbnailType } from '../thumbnail-types.js';
 import { disks } from './workspace.js';
+import { mediaIcon } from './media-controls.js';
 
 const { createElement: h, useEffect, useRef, useState } = react;
 const pending = new Set();
@@ -100,7 +101,9 @@ export function Thumbnail({ path, active, fallback, root }) {
     return () => { observer.disconnect(); cancel(); };
   }, [active, path, type, image, root]);
 
+  const video = type?.startsWith('video/');
   return h('span', { ref: slot, className: 'dwe-thumbnail', 'aria-hidden': true },
-    image ? h('img', { src: image, alt: '', draggable: false }) : fallback,
-    image && type?.startsWith('video/') && h('span', { className: 'dwe-video-mark' }, '▶'));
+    image ? h('span', { className: 'dwe-thumbnail-frame', 'data-video': video || undefined },
+      h('img', { src: image, alt: '', draggable: false }),
+      video && h('span', { className: 'dwe-video-mark' }, mediaIcon('thumbnailPlay', 12))) : fallback);
 }

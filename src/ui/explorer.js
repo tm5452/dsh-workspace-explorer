@@ -1,60 +1,34 @@
 import { joinPath, move, parentOf, renamePath, resourceAddress, samePath, underPath, visit, windowsPath } from './navigation.js';
-import { formatSize, Preview, PreviewBoundary } from './preview.js';
+import { Preview, PreviewBoundary } from './preview.js';
+import { formatSize } from './file-size.js';
 import { disks } from './workspace.js';
 import { useComposerDrop } from './composer-drop.js';
 import { Thumbnail } from './thumbnail.js';
 import { DeleteDialog, FileMenu, RenameDialog } from './file-menu.js';
 import { Favorites, toggleFavorite, useFavorites } from './favorites.js';
 import { createTabDragIcon } from './drag-icon.js';
+import { icon } from './interface-icon.js';
+import { fileIcon } from './file-icon.js';
+import { audioType } from '../audio-types.js';
+import { thumbnailType } from '../thumbnail-types.js';
 import { confirmStackPreview, emptyPreviewStack, moveStackPreview, openStackPreview, previewInScope, removeStackPreviews } from './preview-stack.js';
 
 const { createElement: h, useEffect, useLayoutEffect, useRef, useState, useCallback, useSyncExternalStore } = react;
 const collator = new Intl.Collator('zh-CN', { numeric: true, sensitivity: 'base' });
-const icons = {
-  back: 'M19 12H5m7-7-7 7 7 7',
-  forward: 'M5 12h14m-7-7 7 7-7 7',
-  up: 'M12 19V5m-7 7 7-7 7 7',
-  refresh: 'M19.5 12a7.5 7.5 0 1 1-2.1-5.2L20 9m0-5v5h-5',
-  home: 'm3 10 9-7 9 7v10h-6v-6H9v6H3Z',
-  edit: 'm13 6 5 5m-14 8 1-5L16 3l5 5L10 19l-6 1Z',
-  drive: 'M3 13h18v6H3zm0 0 3-7h12l3 7m-4 3h1',
-  workspace: 'M3 7h6l2 2h10v11H3Zm9 7h6m-2-2 2 2-2 2',
-  close: 'm6 6 12 12M18 6 6 18',
-  pin: 'M16 3l5 5-4 2-2 5v3l-3 1-7-7 1-3h3l5-2 2-4ZM9 16l-6 5',
-  unpin: 'M16 3l5 5-4 2-1 2M9 9H6l-1 3 7 7 3-1v-3M9 16l-6 5M3 3l18 18',
-  external: 'M14 4h6v6m0-6-9 9m7-1v7H5V6h7',
-  chevron: 'm9 6 6 6-6 6',
-  recent: 'M15 11a6 6 0 1 1-12 0 6 6 0 0 1 12 0Zm-6-3v3l2 2m8-8v13m-3-3 3 3 3-3',
-  list: 'M9 6h11M9 12h11M9 18h11M4 6h1M4 12h1M4 18h1',
-  grid: 'M4 4h6v6H4zm10 0h6v6h-6zM4 14h6v6H4zm10 0h6v6h-6z',
-  preview: 'M3 4h18v16H3zM3 13h18',
-  copy: 'M8 8h12v12H8zM16 4H4v12',
-  cut: 'm7 8 14 12m-9-8 9-8M8 7a3 3 0 1 1-6 0 3 3 0 0 1 6 0Zm0 10a3 3 0 1 1-6 0 3 3 0 0 1 6 0Zm0-1 4-4',
-  paste: 'M9 5H5v16h14V5h-4M9 3h6v5H9z',
-  path: 'M4 7h16M4 12h16M4 17h9',
-  star: 'm12 3 2.7 5.5 6.1.9-4.4 4.3 1 6.1-5.4-2.9-5.4 2.9 1-6.1-4.4-4.3 6.1-.9Z',
-  favorites: 'M3 7h7l2 2h9v11H3Zm9 4 .8 1.8 2 .2-1.5 1.4.4 2-1.7-1-1.7 1 .4-2-1.5-1.4 2-.2Z',
-  delete: 'M4 6h16m-14 0 1 14h10l1-14M9 6V3h6v3m-5 4v6m4-6v6',
-  search: 'M16 16l4 4m-2-9a7 7 0 1 1-14 0 7 7 0 0 1 14 0Z',
-};
-
-function icon(name, size = 16) {
-  return h('svg', {
-    width: size, height: size, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor',
-    strokeWidth: 1.6, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true,
-  }, h('path', { d: icons[name] }));
-}
-
-function fileIcon(name, kind, size = 16) {
-  if (kind === 'drive') return icon('drive', size);
-  return h(primitives.FileTypeIcon, kind === 'directory' ? { kind: 'folder', size } : { path: name, size });
-}
 
 function tool(name, label, onClick, disabled = false, pressed) {
   return h('button', {
     type: 'button', className: 'dwe-tool', 'aria-label': label, title: label, onClick, disabled,
     'aria-pressed': pressed, 'data-dwe-tool': name,
-  }, icon(name));
+  }, icon(name === 'star' && pressed ? 'star-on' : name));
+}
+
+function releasePreviewDrag(drag) {
+  if (!drag) return;
+  drag.listeners.abort();
+  drag.external?.cancel();
+  drag.badge?.dispose();
+  if (drag.started) drag.source.ownerDocument.documentElement.removeAttribute('data-dwe-preview-dragging');
 }
 
 function PreviewTabs({ tabs, active, canDragOut, startPreviewDrag, activate, togglePin, close, reorder }) {
@@ -62,11 +36,7 @@ function PreviewTabs({ tabs, active, canDragOut, startPreviewDrag, activate, tog
   const strip = useRef(null);
   const [slot, setSlot] = useState(null);
   const suppressClick = useRef(false);
-  useEffect(() => () => {
-    dragging.current?.listeners.abort();
-    dragging.current?.external?.cancel();
-    dragging.current?.badge?.dispose();
-  }, []);
+  useEffect(() => () => releasePreviewDrag(dragging.current), []);
 
   useLayoutEffect(() => {
     const element = strip.current;
@@ -79,9 +49,7 @@ function PreviewTabs({ tabs, active, canDragOut, startPreviewDrag, activate, tog
   }, [active]);
 
   function reset() {
-    dragging.current?.listeners.abort();
-    dragging.current?.external?.cancel();
-    dragging.current?.badge?.dispose();
+    releasePreviewDrag(dragging.current);
     dragging.current = null;
     setSlot(null);
   }
@@ -111,8 +79,9 @@ function PreviewTabs({ tabs, active, canDragOut, startPreviewDrag, activate, tog
       const drag = dragging.current;
       if (drag?.pointerId !== event.pointerId) return;
       if (!drag.started) {
-        if (Math.max(Math.abs(event.clientX - drag.x), Math.abs(event.clientY - drag.y)) < 4) return;
+        if (Math.hypot(event.clientX - drag.x, event.clientY - drag.y) <= 6) return;
         drag.started = true;
+        drag.source.ownerDocument.documentElement.setAttribute('data-dwe-preview-dragging', '');
         suppressClick.current = true;
         drag.external = startPreviewDrag(strip.current, drag.file);
         drag.badge = createTabDragIcon(drag.source.querySelector('.dwe-preview-icon :is(svg, img)'));
@@ -230,7 +199,16 @@ function Breadcrumb({ path, navigate, dragFolder, workspaceMode, root }) {
   const ref = useRef(null);
   useLayoutEffect(() => {
     const node = ref.current;
-    node.scrollLeft = node.scrollWidth;
+    const end = () => Math.max(0, node.scrollWidth - node.clientWidth);
+    let previousEnd = end();
+    node.scrollLeft = previousEnd;
+    const resize = new ResizeObserver(() => {
+      const nextEnd = end();
+      if (node.scrollLeft >= Math.min(previousEnd, nextEnd) - 1) node.scrollLeft = nextEnd;
+      previousEnd = nextEnd;
+    });
+    resize.observe(node);
+    return () => resize.disconnect();
   }, [path, root]);
   const crumbs = [];
   for (let item = path; item && item.toLowerCase() !== root?.toLowerCase(); item = parentOf(item)) crumbs.unshift(item);
@@ -244,7 +222,7 @@ function Breadcrumb({ path, navigate, dragFolder, workspaceMode, root }) {
     draggable: Boolean(root), onDragStart: root ? event => dragFolder(event, root) : undefined,
   }, root ? fileIcon('', 'directory') : icon('drive'), baseLabel),
   ...crumbs.map(destination => h('span', { key: destination, className: 'dwe-crumb' },
-    icon('chevron'),
+    icon('chevron', 16),
     h('button', {
       type: 'button', onClick: () => navigate(destination), title: destination,
       draggable: true, onDragStart: event => dragFolder(event, destination),
@@ -290,27 +268,66 @@ function changeSortMode(key, byModified) {
 const splitMin = 0.16;
 const splitMax = 0.86;
 const clampSplit = ratio => Math.min(splitMax, Math.max(splitMin, ratio));
+const splitPreference = 'dsh-workspace-explorer:preview-split';
+const splitListeners = new Set();
+let sharedSplit = 0.55;
+try {
+  const saved = localStorage.getItem(splitPreference);
+  if (saved?.trim() && Number.isFinite(Number(saved))) sharedSplit = clampSplit(Number(saved));
+} catch { /* Use the default if storage is unavailable. */ }
+
+function subscribeSplit(listener) {
+  splitListeners.add(listener);
+  return () => splitListeners.delete(listener);
+}
+
+function getSplitRatio() { return sharedSplit; }
+
+function setSplitRatio(value) {
+  const next = typeof value === 'function' ? value(sharedSplit) : value;
+  if (next === sharedSplit) return;
+  sharedSplit = next;
+  for (const listener of splitListeners) listener();
+}
+
+function saveSplitRatio() {
+  try { localStorage.setItem(splitPreference, String(sharedSplit)); }
+  catch { /* Open tabs still share the current value. */ }
+}
 
 function PreviewDivider({ root, ratio, setRatio }) {
-  const grabOffset = useRef(0);
+  const endDrag = useRef(null);
+  useEffect(() => () => endDrag.current?.(), []);
   return h('div', {
     className: 'dwe-divider', role: 'separator', tabIndex: 0,
     'aria-label': '调整文件预览分栏高度', 'aria-orientation': 'horizontal',
     'aria-valuemin': splitMin * 100, 'aria-valuemax': splitMax * 100,
     'aria-valuenow': Math.round(ratio * 100),
     onPointerDown: event => {
-      if (event.button !== 0) return;
+      if (event.button !== 0 || endDrag.current) return;
       event.preventDefault();
-      const divider = event.currentTarget;
-      const bounds = divider.getBoundingClientRect();
-      grabOffset.current = event.clientY - (bounds.top + bounds.height / 2);
-      divider.setPointerCapture(event.pointerId);
-    },
-    onPointerMove: event => {
-      const divider = event.currentTarget;
-      if (!divider.hasPointerCapture(event.pointerId)) return;
-      const bounds = root.current.getBoundingClientRect();
-      if (bounds.height > 0) setRatio(clampSplit((event.clientY - bounds.top - grabOffset.current) / bounds.height));
+      const dividerBounds = event.currentTarget.getBoundingClientRect();
+      const grabOffset = event.clientY - (dividerBounds.top + dividerBounds.height / 2);
+      const pointer = event.pointerId;
+      const lifetime = new AbortController();
+      const options = { capture: true, signal: lifetime.signal };
+      function move(next) {
+        if (next.pointerId !== pointer) return;
+        if (!(next.buttons & 1)) { finish(); return; }
+        const bounds = root.current?.getBoundingClientRect();
+        if (bounds?.height) setRatio(clampSplit((next.clientY - bounds.top - grabOffset) / bounds.height));
+      }
+      function finish(next) {
+        if (next?.pointerId !== undefined && next.pointerId !== pointer) return;
+        lifetime.abort();
+        endDrag.current = null;
+        saveSplitRatio();
+      }
+      endDrag.current = finish;
+      window.addEventListener('pointermove', move, options);
+      window.addEventListener('pointerup', finish, options);
+      window.addEventListener('pointercancel', finish, options);
+      window.addEventListener('blur', finish, options);
     },
     onKeyDown: event => {
       if (event.key === 'ArrowUp') setRatio(value => clampSplit(value - 0.05));
@@ -318,6 +335,7 @@ function PreviewDivider({ root, ratio, setRatio }) {
       else if (event.key === 'Home') setRatio(splitMin);
       else if (event.key === 'End') setRatio(splitMax);
       else return;
+      saveSplitRatio();
       event.preventDefault();
       event.stopPropagation();
     },
@@ -325,12 +343,13 @@ function PreviewDivider({ root, ratio, setRatio }) {
 }
 
 export function Explorer({
-  cwd, sessionId, initialPath, bindFileActions, getTarget, onPath, openLocal, openDocument, openFolderTab,
-  openPreviewTab, refreshDirectories, updateRenamedPath, getInput,
+  cwd, sessionId, initialPath, initialWorkspaceRoot, bindFileActions, getTarget, onPath, openLocal, openDocument, openFolderTab,
+  openPreviewTab, refreshDirectories, updateRenamedPath, getInput, restoreMusicPreview,
 }) {
   const workspace = windowsPath(cwd);
   const [localHistory, setLocalHistory] = useState(() => firstPath(initialPath === undefined ? workspace : initialPath));
-  const [scoped, setScoped] = useState(null);
+  const [scoped, setScoped] = useState(() => initialWorkspaceRoot
+    ? { root: initialWorkspaceRoot, history: firstPath(initialWorkspaceRoot) } : null);
   const workspaceMode = scoped !== null;
   const root = scoped?.root ?? null;
   const history = scoped?.history ?? localHistory;
@@ -343,7 +362,8 @@ export function Explorer({
   const [selection, setSelection] = useState(emptySelection);
   const [previewStack, setPreviewStack] = useState(emptyPreviewStack);
   const [previewOpen, setPreviewOpen] = useState(true);
-  const [splitRatio, setSplitRatio] = useState(0.55);
+  const [previewMusicActions, setPreviewMusicActions] = useState(null);
+  const splitRatio = useSyncExternalStore(subscribeSplit, getSplitRatio);
   const [editor, setEditor] = useState(null);
   const [pathError, setPathError] = useState('');
   const [actionError, setActionError] = useState('');
@@ -365,6 +385,7 @@ export function Explorer({
   const scroll = useRef(null);
   const layout = useRef(null);
   const input = useRef(null);
+  const pathField = useRef(null);
   const pathRequest = useRef(null);
   const resultToReveal = useRef(null);
   const [search, setSearch] = useState('');
@@ -388,8 +409,10 @@ export function Explorer({
       (sortByModified ? compareModified(a, b) : 0) || collator.compare(a.name, b.name) || collator.compare(a.relative, b.relative)),
   } : searchReady, [searchReady, sortByModified]);
   const previewTabs = previewStack.tabs.filter(tab => previewInScope(tab, root));
-  const activePreview = previewTabs.find(tab => tab.id === previewStack.active) ?? previewTabs[0];
+  const activePreview = previewStack.suspended ? undefined
+    : previewTabs.find(tab => tab.id === previewStack.active) ?? previewTabs[0];
   const shownPreview = activePreview?.file;
+  const mediaPreview = shownPreview && (audioType(shownPreview.name) || thumbnailType(shownPreview.name)?.startsWith('video/'));
   const selectedEntries = term ? [] : entries.filter(entry => selection.names.has(entry.name));
   const composerItems = entries => entries.map(entry => ({
     name: entry.name, path: entry.path ?? joinPath(path, entry.name), folder: entry.type !== 'file',
@@ -462,7 +485,7 @@ export function Explorer({
     setScoped(workspaceMode ? null : { root: workspace, history: firstPath(workspace) });
   }
 
-  useLayoutEffect(() => { onPath(path); }, [onPath, path]);
+  useLayoutEffect(() => { onPath(path, root); }, [onPath, path, root]);
 
   useEffect(() => {
     if (workspaceMode && !root) return;
@@ -477,7 +500,7 @@ export function Explorer({
   }, [path, root, revision, workspaceMode]);
 
   useEffect(() => {
-    if (!term || !sessionId) return;
+    if (!term) return;
     const controller = new AbortController();
     const signal = controller.signal;
     const timer = setTimeout(() => {
@@ -488,7 +511,7 @@ export function Explorer({
       });
     }, 220);
     return () => { clearTimeout(timer); controller.abort(); };
-  }, [root, term, revision, sessionId]);
+  }, [root, term, revision]);
 
   useEffect(() => () => pathRequest.current?.abort(), []);
   useLayoutEffect(() => { scroll.current.scrollTop = 0; }, [path, term]);
@@ -501,8 +524,19 @@ export function Explorer({
 
   const editing = editor !== null;
   useLayoutEffect(() => {
-    if (editing) { input.current.focus(); input.current.select(); }
-  }, [editing]);
+    if (!editing) return;
+    input.current.focus();
+    input.current.select();
+    function closeOnOutsideClick(event) {
+      if (!pathField.current?.contains(event.target)) closeEditor();
+    }
+    document.addEventListener('pointerdown', closeOnOutsideClick, true);
+    document.addEventListener('click', closeOnOutsideClick, true);
+    return () => {
+      document.removeEventListener('pointerdown', closeOnOutsideClick, true);
+      document.removeEventListener('click', closeOnOutsideClick, true);
+    };
+  }, [editing, closeEditor]);
 
   function changeView(mode) {
     setViewModes(previous => new Map(previous).set(viewKey, mode));
@@ -522,7 +556,7 @@ export function Explorer({
   const openPreview = useCallback((absolute, name, size, line) => {
     const targetLine = Number.isSafeInteger(line) && line > 0 ? line : undefined;
     const file = { name, absolute, size, line: targetLine, address: resourceAddress(absolute) };
-    setPreviewStack(stack => openStackPreview(stack, file, underPath(absolute, root) ? root : null));
+    setPreviewStack(stack => openStackPreview({ ...stack, suspended: false }, file, underPath(absolute, root) ? root : null));
   }, [root]);
 
   const revealFile = useCallback((absolute, name, size, line) => {
@@ -750,20 +784,25 @@ export function Explorer({
   },
     h('div', { className: 'dwe-folder', 'aria-label': '本机文件列表' },
       h('div', { className: 'dwe-address-bar' },
-        editing ? h('form', { className: 'dwe-address', onSubmit: submitPath },
-          h('input', {
-            type: 'text', 'aria-label': '输入本机路径', placeholder: '例如 D:\\资料', ref: input,
-            value: editor, onChange: event => { setEditor(event.target.value); setPathError(''); },
-            readOnly: locating, spellCheck: false,
-          }))
-          : h(Breadcrumb, { path, navigate, dragFolder, workspaceMode, root }),
-        editing ? tool('close', '取消编辑路径', closeEditor)
-          : tool('edit', '编辑路径 (Ctrl+L)', () => setEditor(path ?? '')),
-        tool('star', favorited ? '取消收藏当前文件夹' : '收藏当前文件夹', () => toggleFavorite(path), !path, favorited),
+        h('div', {
+          ref: pathField, className: 'dwe-path-field', 'data-editing': editing || undefined,
+          onDoubleClick: event => {
+            if (!editing && !event.target.closest('button')) setEditor(path ?? '');
+          },
+        },
+          editing ? h('form', { className: 'dwe-address', onSubmit: submitPath },
+            h('input', {
+              type: 'text', 'aria-label': '输入本机路径', placeholder: '例如 D:\\资料', ref: input,
+              value: editor, onChange: event => { setEditor(event.target.value); setPathError(''); },
+              readOnly: locating, spellCheck: false,
+            }))
+            : h(Breadcrumb, { path, navigate, dragFolder, workspaceMode, root }),
+          tool('star', favorited ? '取消收藏当前文件夹' : '收藏当前文件夹', () => toggleFavorite(path), !path, favorited)),
         h('button', {
-          type: 'button', className: 'dwe-tool dwe-favorites-tool', title: '收藏夹', 'data-dwe-tool': 'favorites',
+          type: 'button', className: 'dwe-tool dwe-expanding-tool dwe-favorites-tool', 'aria-label': '收藏夹', 'data-dwe-tool': 'favorites',
           ref: favoritesButton, 'aria-expanded': favoritesOpen, onClick: () => setFavoritesOpen(open => !open),
-        }, icon('favorites'), '收藏夹')),
+        }, h('span', { className: 'dwe-expanding-icon' }, icon('favorites')),
+        h('span', { className: 'dwe-expanding-label', 'aria-hidden': true }, h('span', null, '收藏夹')))),
       h('div', { className: 'dwe-toolbar' },
         h('div', { className: 'dwe-nav' },
           tool('back', '后退 (Alt+←)', () => historyStep(-1), history.index === 0),
@@ -778,15 +817,17 @@ export function Explorer({
           tool('cut', '剪切', () => runAction('cut', selectedEntries), !modifySelected),
           tool('paste', '粘贴', () => runAction('paste'), !path || working),
           tool('delete', '删除', () => runAction('delete', selectedEntries), !modifySelected),
+          h('span', { className: 'dwe-v-divider', 'aria-hidden': true }),
           h('button', {
-            type: 'button', className: 'dwe-tool dwe-scope-tool',
+            type: 'button', className: 'dwe-tool dwe-expanding-tool dwe-scope-tool', 'aria-label': '工作区内浏览',
             'aria-pressed': workspaceMode, disabled: !workspace && !workspaceMode,
             onClick: toggleWorkspaceMode,
-          }, '在工作区内工作'))),
+          }, h('span', { className: 'dwe-expanding-icon' }, icon('workspace-scope')),
+          h('span', { className: 'dwe-expanding-label', 'aria-hidden': true }, h('span', null, '工作区内浏览'))))),
       sessionId && favoritesOpen && h(Favorites, {
         anchor: favoritesButton, close: closeFavorites, folders: favorites, currentPath: path, workspaceMode, root,
         navigate: destination => { navigate(destination); closeFavorites(); },
-        removeIcon: icon('close', 14),
+        removeIcon: icon('close', 18),
       }),
       workspaceMode && h('div', { className: 'dwe-search' }, icon('search'),
         h('input', {
@@ -839,7 +880,7 @@ export function Explorer({
                     path: entry.type === 'file' ? joinPath(path, entry.name) : null,
                     active: Boolean(sessionId), root,
                     fallback: fileIcon(entry.name, entry.type, 44),
-                  }) : fileIcon(entry.name, entry.type),
+                  }) : fileIcon(entry.name, entry.type, 16),
                   h('span', null, entry.name)),
                 !grid && h('span', { className: 'dwe-meta' }, entryType(entry)),
                 !grid && h('span', { className: 'dwe-meta' }, formatSize(entry.size))))))),
@@ -848,20 +889,19 @@ export function Explorer({
           term ? found?.matches ? found.matches.length + ' 个结果' + (found.truncated ? ' · 请缩小关键词' : '') : ' '
             : actionNotice || (selectedEntries.length > 1 ? '已选择 ' + selectedEntries.length + ' 项'
               : ready?.entries ? ready.entries.length + ' 个项目' + (ready.truncated ? ' · 列表已截断' : '') : ' ')),
-        tool('recent', '按修改时间排序', () => changeSortMode(sortKey, !readSortMode(sortKey)), !path, sortByModified),
-        h('span', { className: 'dwe-v-divider', 'aria-hidden': true }),
-        h('div', { className: 'dwe-nav', role: 'group', 'aria-label': '文件视图' },
+        h('div', { className: 'dwe-nav dwe-status-actions', role: 'group', 'aria-label': '排序和文件视图' },
+          tool('recent', '按修改时间排序', () => changeSortMode(sortKey, !readSortMode(sortKey)), !path, sortByModified),
           tool('list', '列表', () => changeView('list'), false, !grid),
           tool('grid', '大图标', () => changeView('grid'), false, grid)),
         h('span', { className: 'dwe-v-divider', 'aria-hidden': true }),
         tool('preview', '预览窗格', () => setPreviewOpen(open => !open), false, previewOpen))),
     previewOpen && h(PreviewDivider, { root: layout, ratio: splitRatio, setRatio: setSplitRatio }),
     previewOpen && h('section', { className: 'dwe-preview', 'aria-label': '文件预览' },
-      h('header', { className: 'dwe-preview-bar' },
+      h('header', { className: 'dwe-preview-bar', 'data-dwe-media-header': Boolean(mediaPreview) || undefined },
         h('span', { className: 'dwe-preview-label' }, '预览'),
-        previewTabs.length > 0 && h(PreviewTabs, {
+        activePreview && h(PreviewTabs, {
           tabs: previewTabs, active: activePreview.id, canDragOut: Boolean(sessionId), startPreviewDrag,
-          activate: id => setPreviewStack(stack => ({ ...stack, active: id })),
+          activate: id => setPreviewStack(stack => ({ ...stack, active: id, suspended: false })),
           togglePin: id => setPreviewStack(stack => ({ ...stack,
             tabs: stack.tabs.map(tab => tab.id === id ? { ...tab, pinned: !tab.pinned } : tab),
           })),
@@ -869,11 +909,16 @@ export function Explorer({
           reorder: (from, to, after) => setPreviewStack(stack => moveStackPreview(stack, from, to, after)),
         }),
         shownPreview && h('span', { className: 'dwe-v-divider', 'aria-hidden': true }),
-        shownPreview && tool('external', '在 DSH 文档预览中打开', openNative)),
+        shownPreview && h('div', { className: 'dwe-preview-actions' },
+          h('span', { ref: setPreviewMusicActions, className: 'dwe-preview-music-actions' }),
+          tool('external', '在 DSH 文档预览中打开', openNative))),
       h('div', { className: 'dwe-preview-body' },
         shownPreview ? h(PreviewBoundary, { key: JSON.stringify([activePreview.id, shownPreview.absolute, root]) },
           h(Preview, { file: shownPreview, root, confirmed: activePreview.confirmed,
             onConfirm: () => setPreviewStack(stack => confirmStackPreview(stack, activePreview.id, shownPreview)),
+            onMinimize: () => setPreviewStack(stack => ({ ...stack, suspended: true })),
+            onRestore: restoreMusicPreview ? () => restoreMusicPreview(shownPreview) : undefined,
+            minimizeHost: previewMusicActions,
           }))
           : h('p', { className: 'dwe-preview-hint' }, '单击一个文件进行预览'))),
     sessionId && menu && h(FileMenu, { menu, close: closeMenu, invoke: runMenuAction, groups: [
@@ -901,8 +946,8 @@ function SearchResults({ found, select, canDrag, contextMenu, drag }) {
             h('small', null, match.relative.slice(0, -(match.name.length + 1)) || '工作区根目录')))))));
 }
 
-export function ExplorerTitle({ path }) {
+export function ExplorerTitle({ path, workspaceMode }) {
   const name = path === null ? '此电脑' : pathName(path);
-  return h('span', { 'data-dwe-tab-title': '', title: path ?? name },
-    fileIcon('', 'directory'), h('span', null, name));
+  return h('span', { 'data-dwe-tab-title': '', 'data-dwe-workspace-tab': workspaceMode || undefined, title: path ?? name },
+    workspaceMode ? icon('file-folder-workspace', 16) : fileIcon('', 'directory'), h('span', null, name));
 }

@@ -1,5 +1,6 @@
 import { Preview, PreviewBoundary } from './preview.js';
 import { resourceAddress, underPath, windowsPath } from './navigation.js';
+import { fileIcon } from './file-icon.js';
 
 const prefix = 'dsh-resource://workspace-explorer/preview/';
 const h = react.createElement;
@@ -24,7 +25,7 @@ function readAddress(address) {
   } catch { return; }
 }
 
-export function FilePreviewTab({ useTabInfo }) {
+export function FilePreviewTab({ useTabInfo, restoreMusicPreview }) {
   const { tab } = useTabInfo();
   const address = tab.navigation.address;
   const line = tab.navigation.params?.line;
@@ -36,7 +37,9 @@ export function FilePreviewTab({ useTabInfo }) {
 
   return h('section', { className: 'dwe dwe-preview', 'aria-label': file?.name ?? '文件预览' },
     h('div', { className: 'dwe-preview-body' },
-      file ? h(PreviewBoundary, { key: address, standalone: true }, h(Preview, { file, root: target.root, openImmediately: true }))
+      file ? h(PreviewBoundary, { key: address, standalone: true },
+        h(Preview, { file, root: target.root, openImmediately: true,
+          onRestore: restoreMusicPreview ? () => restoreMusicPreview(file) : undefined }))
         : h('p', { className: 'dwe-preview-hint' }, '无法打开文件预览')));
 }
 
@@ -48,6 +51,6 @@ export function FilePreviewTitle({ useTabInfo }) {
   const { tab } = useTabInfo();
   const target = readAddress(tab.navigation.address);
   return h('span', { 'data-dwe-tab-title': '', title: target?.absolute },
-    h(primitives.FileTypeIcon, { path: target?.name ?? 'file', size: 16 }),
+    fileIcon(target?.name ?? 'file'),
     h('span', null, target?.name ?? '文件预览'));
 }

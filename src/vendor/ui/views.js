@@ -16,6 +16,8 @@
 import { parseModel } from '../model/detect3d.js';
 import { buildScene, createModelView } from '../model/renderer.js';
 import { PreviewUnavailable } from '../../ui/preview-unavailable.js';
+import { fileIcon } from '../../ui/file-icon.js';
+import { audioTypes as AUDIO_MIME } from '../../audio-types.js';
 import {
   bindPreviewCss,
   extraBodies,
@@ -67,17 +69,6 @@ const AUDIO_EXTENSIONS = ['mp3', 'wav', 'ogg', 'oga', 'm4a', 'aac', 'flac', 'opu
 const VIDEO_EXTENSIONS = ['mp4', 'webm', 'm4v', 'mov', 'mkv'];
 const SUBTITLE_EXTENSIONS = ['srt', 'vtt', 'ass', 'ssa'];
 const EMPTY_ARRAY = [];
-
-const AUDIO_MIME = {
-  mp3: 'audio/mpeg',
-  wav: 'audio/wav',
-  ogg: 'audio/ogg',
-  oga: 'audio/ogg',
-  m4a: 'audio/mp4',
-  aac: 'audio/aac',
-  flac: 'audio/flac',
-  opus: 'audio/ogg',
-};
 
 const VIDEO_MIME = {
   mp4: 'video/mp4',
@@ -1625,14 +1616,7 @@ function ArchiveEntryRow(props) {
   const isDir = !!node.dir;
   const entry = node.entry;
   const open = isDir && props.open;
-  let icon = null;
-  if (Prim.FileTypeIcon) {
-    try {
-      icon = h(Prim.FileTypeIcon, { path: node.path, size: 14 });
-    } catch (err) {
-      icon = null;
-    }
-  }
+  const icon = fileIcon(node.path, isDir ? 'directory' : 'file', 14);
   const activate = () => props.onActivate(node);
   return h('div', {
     className: 'dshpx-entry',

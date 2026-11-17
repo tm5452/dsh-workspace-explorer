@@ -25,9 +25,9 @@ function loadRuntime() {
     ]);
     const url = URL.createObjectURL(main);
     try {
-      const { getDocument, GlobalWorkerOptions } = await import(url);
+      const { getDocument, GlobalWorkerOptions, PDFDataRangeTransport } = await import(url);
       GlobalWorkerOptions.workerSrc = URL.createObjectURL(worker);
-      return getDocument;
+      return { getDocument, PDFDataRangeTransport };
     } finally {
       URL.revokeObjectURL(url);
     }
@@ -129,35 +129,58 @@ function PdfPages({ pdf, initialSize }) {
     measured && count < pdf.numPages && h('div', { key: 'more', className: 'dwe-pdf-more', 'aria-hidden': true }));
 }
 
-export function PdfPreview({ data, standalone }) {
+export function PdfPreview({ source, standalone }) {
   const [document, setDocument] = useState(null);
   const [failed, setFailed] = useState(false);
   useEffect(() => {
-    let canceled = false;
+    const controller = new AbortController();
+    const { signal } = controller;
     let task;
     async function load() {
       try {
-        const getDocument = await loadRuntime();
-        if (canceled) return;
+        const { getDocument, PDFDataRangeTransport } = await loadRuntime();
+        if (signal.aborted) return;
+        if (!Number.isSafeInteger(source.size) || source.size <= 0) throw new Error('文档为空');
+        const range = new PDFDataRangeTransport(source.size, null);
+        range.abort = () => controller.abort();
+        range.requestDataRange = (begin, end) => {
+          void (async () => {
+            const span = begin + '-' + (end - 1);
+            const expected = 'bytes ' + span + '/' + source.size;
+            const response = await fetch(source.url, { signal, headers: { Range: 'bytes=' + span } });
+            if (response.status !== 206 || response.headers.get('content-range') !== expected) {
+              await response.body?.cancel();
+              throw new Error('无法读取文档分段');
+            }
+            const chunk = new Uint8Array(await response.arrayBuffer());
+            if (chunk.length !== end - begin) throw new Error('文档分段不完整');
+            if (!signal.aborted) range.onDataRange(begin, chunk);
+          })().catch(() => {
+            if (signal.aborted) return;
+            setFailed(true);
+            controller.abort();
+            void task?.destroy().catch(() => {});
+          });
+        };
         task = getDocument({
-          data: data.slice(), cMapPacked: true, useWorkerFetch: false,
+          range, disableStream: true, disableAutoFetch: true, cMapPacked: true, useWorkerFetch: false,
           cMapUrl: asset('cmaps/'), standardFontDataUrl: asset('standard_fonts/'), wasmUrl: asset('wasm/'),
           enableXfa: false, isEvalSupported: false,
         });
         const pdf = await task.promise;
-        if (canceled) return;
+        if (signal.aborted) return;
         const first = await pdf.getPage(1);
-        if (!canceled) setDocument({ pdf, initialSize: first.getViewport({ scale: 1 }) });
+        if (!signal.aborted) setDocument({ pdf, initialSize: first.getViewport({ scale: 1 }) });
       } catch {
-        if (!canceled) setFailed(true);
+        if (!signal.aborted) setFailed(true);
       }
     }
     void load();
     return () => {
-      canceled = true;
+      controller.abort();
       void task?.destroy().catch(() => {});
     };
-  }, [data]);
+  }, [source]);
 
   if (failed) return h(PreviewUnavailable, { standalone });
   return document ? h(PdfPages, document) : h('p', { className: 'dwe-preview-hint', role: 'status' }, '正在加载文档页面…');

@@ -1,14 +1,17 @@
 import { Explorer, ExplorerTitle } from '../ui/explorer.js';
 import { explorerCss } from '../ui/styles.js';
 import { scrollHorizontally } from '../ui/horizontal-wheel.js';
-import { parentOf, resourceAddress, sessionFilePath, underPath, windowsPath } from '../ui/navigation.js';
+import { parentOf, resourceAddress, samePath, sessionFilePath, underPath, windowsPath } from '../ui/navigation.js';
 import { renameFavorites } from '../ui/favorites.js';
 import { installConversationPathDrop } from '../ui/composer-drop.js';
 import { FilePreviewTab, FilePreviewTitle, previewTabAddress, previewTabLabel } from '../ui/preview-tab.js';
+import { MusicCapsule } from '../ui/music-preview.js';
+import { stopMusic } from '../ui/music-player.js';
 import { installSidebarMotion } from './sidebar-motion.js';
 import { installSidebarClose } from './sidebar-close.js';
 import { installSidebarFade } from './sidebar-fade.js';
-import { installSidebarTabDrag } from './sidebar-tab-drag.js';
+import { installSidebarTabInteractions } from './sidebar-tab-drag.js';
+import { installSidebarHeaderControls } from './sidebar-header-controls.js';
 import { installMouseGestures } from './mouse-gestures.js';
 import { cardIconMarkup, cardIconRatio, cardIconViewBox } from '../ui/card-icon.js';
 import { myPcIconMarkup, myPcIconRatio, myPcIconViewBox } from '../ui/my-pc-icon.js';
@@ -93,14 +96,16 @@ function apply(ctx) {
       return sidebar.openTabs.getSnapshot().filter(tab => tab.sessionId === sessionId && tab.kind === tabKind);
     }
 
-    function createView(initialPath) {
+    function createView(initialPath, initialWorkspaceRoot = null) {
       const host = document.createElement('div');
       host.className = 'dwe-host';
       const address = (initialPath === null ? computerPrefix : instancePrefix) + crypto.randomUUID();
-      const view = { host, address, path: initialPath ?? null, initialPath };
+      const view = { host, address, path: initialPath ?? null, initialPath,
+        initialWorkspaceRoot, workspaceRoot: initialWorkspaceRoot };
       view.getTarget = () => view.target;
-      view.onPath = path => {
-        if (view.path === path) return;
+      view.onPath = (path, root) => {
+        if (view.path === path && view.workspaceRoot === root) return;
+        view.workspaceRoot = root;
         view.path = path;
         notify();
       };
@@ -190,6 +195,11 @@ function apply(ctx) {
       }
       if (detached) return;
       rememberOrder(presentedSession);
+      for (const view of viewList) {
+        if (!view.workspaceRoot) continue;
+        const list = view.host.querySelector('.dwe-list');
+        if (list?.getClientRects().length) view.handoffScroll = { path: view.path, top: list.scrollTop, left: list.scrollLeft };
+      }
       detached = true;
       if (expanded && viewList.length) beginHandoff();
       // The old native store is still adopted before React commits the session change.
@@ -219,10 +229,37 @@ function apply(ctx) {
       handoffFrame = undefined;
     }
 
-    function placeView(view, options) {
-      sidebar.openResource(view.address, { kind: tabKind, ...options });
+    function openNextToActive(address, options) {
+      const sessionId = sidebar.mounted.getSnapshot();
+      const layout = sidebar.mountedSurface?.()?.layout;
+      const pane = layout?.nodes[options.paneId ?? layout.activePaneId];
+      const index = pane?.host === 'dock' ? pane.tabs.indexOf(pane.activeTabId) + 1 : 0;
+      sidebar.openResource(address, options);
+      if (!index || index === pane.tabs.length) return;
+      const tab = sidebar.active();
+      // Opening an existing preview only focuses it. Leave it in its original slot.
+      if (tab?.kind === options.kind && tab.contentId === address && !layout.tabs[tab.id]) {
+        sidebar.actionsFor?.(sessionId)?.placeTab?.(sessionId, tab.id, pane.id, index);
+      }
+    }
+
+    function placeView(view, options, besideActive = false) {
+      const placement = { kind: tabKind, ...options };
+      if (besideActive) openNextToActive(view.address, placement);
+      else sidebar.openResource(view.address, placement);
       const tab = sidebar.active();
       if (tab?.kind === tabKind && tab.contentId === view.address) bindings.set(tab.id, view);
+    }
+
+    function getOrCreateWorkspaceView() {
+      if (!fileFocused || !activeView?.workspaceRoot || !workspace) return;
+      if (samePath(activeView.workspaceRoot, workspace)) return activeView;
+      const existing = viewList.find(view => samePath(view.workspaceRoot, workspace));
+      if (existing) return existing;
+      const view = createView(workspace, workspace);
+      const index = viewList.indexOf(activeView) + 1;
+      viewList = [...viewList.slice(0, index), view, ...viewList.slice(index)];
+      return view;
     }
 
     function present(sessionId, cwd) {
@@ -235,6 +272,7 @@ function apply(ctx) {
         if (first) {
           syncTabs();
         } else {
+          activeView = getOrCreateWorkspaceView() ?? activeView;
           const nativeActive = sidebar.active();
           const preserveExpansion = expanded;
           projecting = true;
@@ -254,6 +292,22 @@ function apply(ctx) {
           notify();
           rememberPresentation();
         }
+      } else {
+        // A newly mounted session's cwd can arrive after its sidebar is available.
+        const view = getOrCreateWorkspaceView();
+        if (!view || view === activeView) return;
+        const preserveExpansion = expanded;
+        const tabId = [...bindings].find(([, item]) => item === view)?.[0];
+        projecting = true;
+        try {
+          if (tabId) sidebar.focus(tabId);
+          else placeView(view, undefined, true);
+          if (preserveExpansion !== undefined && sidebar.isExpanded() !== preserveExpansion) sidebar.toggleExpanded();
+        } finally {
+          projecting = false;
+        }
+        notify();
+        rememberPresentation();
       }
     }
 
@@ -270,7 +324,8 @@ function apply(ctx) {
       const address = instancePrefix + crypto.randomUUID();
       folderTabs.set(address, path);
       try {
-        sidebar.openResource(address, { kind: tabKind, paneId });
+        if (paneId) openNextToActive(address, { kind: tabKind, paneId });
+        else sidebar.openResource(address, { kind: tabKind });
         syncTabs();
         const tab = sidebar.active();
         return tab?.contentId === address ? bindings.get(tab.id) : undefined;
@@ -283,7 +338,7 @@ function apply(ctx) {
       if (sidebar.mounted.getSnapshot() !== sessionId) return;
       const address = previewTabAddress(file, root);
       if (!address) return;
-      sidebar.openResource(address, { kind: PREVIEW_KIND, paneId, params: file.line ? { line: file.line } : undefined });
+      openNextToActive(address, { kind: PREVIEW_KIND, paneId, params: file.line ? { line: file.line } : undefined });
     }
 
     async function statFile(sessionId, file, signal) {
@@ -308,6 +363,25 @@ function apply(ctx) {
 
     function currentExplorer() {
       return bindings.get(sidebar.active()?.id) ?? activeView ?? viewList[0];
+    }
+
+    function restoreMusicPreview(file, origin) {
+      const sessionId = sidebar.mounted.getSnapshot();
+      if (!sessionId) return false;
+      const existing = viewList.includes(origin) ? origin : currentExplorer();
+      const tab = filesIn(sessionId).find(item => bindings.get(item.tabId) === existing);
+      if (tab) {
+        sidebar.focus(tab.tabId);
+        if (!sidebar.isExpanded() && !existing.target?.isFloating) sidebar.toggleExpanded();
+      }
+      const target = tab ? existing : openFolderTab(parentOf(file.absolute));
+      if (!target) return false;
+      revealFile(target, file, file.line);
+      return true;
+    }
+
+    function MediaFilePreviewTab(props) {
+      return h(FilePreviewTab, { ...props, restoreMusicPreview });
     }
 
     function isVisibleExplorer(view) {
@@ -459,6 +533,15 @@ function apply(ctx) {
         const target = { sessionId, paneId: panel.id, isFloating: panel.isFloating };
         view.target = target;
         element.appendChild(view.host);
+        const savedScroll = view.handoffScroll;
+        view.handoffScroll = undefined;
+        if (savedScroll?.path === view.path) {
+          const list = view.host.querySelector('.dwe-list');
+          if (list) {
+            list.scrollTop = savedScroll.top;
+            list.scrollLeft = savedScroll.left;
+          }
+        }
         notify();
         capturePresentation(sessionId);
         const dispose = tab.actions.bindCommands?.({ refresh: () => view.fileActions?.refresh() });
@@ -501,18 +584,21 @@ function apply(ctx) {
     function Title({ sessionId, useTabInfo }) {
       const { tab } = useTabInfo();
       const path = react.useSyncExternalStore(subscribe, () => boundView(sessionId, tab.id)?.path ?? null);
+      const workspaceMode = react.useSyncExternalStore(subscribe, () => Boolean(boundView(sessionId, tab.id)?.workspaceRoot));
       react.useLayoutEffect(() => {
         if (tab.visible) capturePresentation(sessionId);
       });
-      return h(ExplorerTitle, { path });
+      return h(ExplorerTitle, { path, workspaceMode });
     }
 
     function View({ view, cwd }) {
       const target = react.useSyncExternalStore(subscribe, view.getTarget);
       const sessionId = target?.sessionId;
       return reactDom.createPortal(h(Explorer, {
-        sessionId, cwd, initialPath: view.initialPath, getTarget: view.getTarget, bindFileActions: view.bindFileActions,
+        sessionId, cwd, initialPath: view.initialPath, initialWorkspaceRoot: view.initialWorkspaceRoot,
+        getTarget: view.getTarget, bindFileActions: view.bindFileActions,
         onPath: view.onPath, openLocal, openDocument, openFolderTab, openPreviewTab, refreshDirectories, updateRenamedPath, getInput,
+        restoreMusicPreview: file => restoreMusicPreview(file, view),
       }), view.host);
     }
 
@@ -544,7 +630,8 @@ function apply(ctx) {
       react.useLayoutEffect(() => {
         if (sessionId && sidebar.mounted.getSnapshot() === sessionId) present(sessionId, cwd);
       }, [sessionId, cwd]);
-      return currentViews.map(view => h(View, { key: view.address, view, cwd }));
+      return h(react.Fragment, null, h(MusicCapsule, { sessionId }),
+        currentViews.map(view => h(View, { key: view.address, view, cwd })));
     }
 
     scope.effect(() => {
@@ -568,17 +655,20 @@ function apply(ctx) {
       const disposeMotion = installSidebarMotion(sidebar);
       const disposeSidebarClose = installSidebarClose(sidebar, () => projecting || detached);
       const disposeSidebarFade = installSidebarFade(sidebar);
-      const disposeSidebarTabDrag = installSidebarTabDrag(sidebar.mounted);
+      const disposeSidebarTabInteractions = installSidebarTabInteractions(sidebar.mounted);
+      const disposeSidebarHeaderControls = installSidebarHeaderControls(sidebar);
       const disposeTabs = sidebar.openTabs.subscribe(syncTabs);
       const disposeSwitch = sidebar.mounted.subscribe(closeDepartingTabs);
       return () => {
+        stopMusic();
         disposeFileOpener();
         disposeConversationPathDrop();
         disposeMouseGestures();
         disposeMotion();
         disposeSidebarClose();
         disposeSidebarFade();
-        disposeSidebarTabDrag();
+        disposeSidebarTabInteractions();
+        disposeSidebarHeaderControls();
         disposeTabs();
         disposeSwitch();
         detached = false;
@@ -591,7 +681,7 @@ function apply(ctx) {
       ['shell.overlay', undefined, Keeper],
       ['sidebar.right.pane.tab', id, Anchor],
       ['sidebar.right.pane.tab.title', id, Title],
-      ['sidebar.right.pane.tab', PREVIEW_KIND, FilePreviewTab],
+      ['sidebar.right.pane.tab', PREVIEW_KIND, MediaFilePreviewTab],
       ['sidebar.right.pane.tab.title', PREVIEW_KIND, FilePreviewTitle],
       ['sidebar.right.tab.guide.entry', id, ExplorerGuide],
     ]) {

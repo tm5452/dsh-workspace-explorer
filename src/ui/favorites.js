@@ -1,8 +1,10 @@
 import { renamePath, underPath, windowsPath } from './navigation.js';
+import { icon } from './interface-icon.js';
+import { fileIcon } from './file-icon.js';
 
 const key = 'dsh-workspace-explorer.favorites';
 const dragType = 'application/x-dwe-favorite';
-const { createElement: h, useLayoutEffect, useRef, useSyncExternalStore } = react;
+const { createElement: h, useLayoutEffect, useRef, useState, useSyncExternalStore } = react;
 const listeners = new Set();
 
 function unique(paths) {
@@ -78,6 +80,7 @@ export function Favorites({ anchor, close, folders, navigate, currentPath, remov
   const panel = useRef(null);
   const dragged = useRef(null);
   const dropRow = useRef(null);
+  const [editing, setEditing] = useState(false);
 
   function clearDropRow() {
     if (dropRow.current) delete dropRow.current.dataset.dweFavoriteDrop;
@@ -87,6 +90,12 @@ export function Favorites({ anchor, close, folders, navigate, currentPath, remov
   function resetDrag() {
     dragged.current = null;
     clearDropRow();
+  }
+
+  function stopEditing() {
+    resetDrag();
+    setEditing(false);
+    requestAnimationFrame(() => panel.current?.querySelector('.dwe-favorites-edit')?.focus({ preventScroll: true }));
   }
 
   function isAfter(event) {
@@ -126,23 +135,33 @@ export function Favorites({ anchor, close, folders, navigate, currentPath, remov
     window.addEventListener('blur', close, { signal: lifetime.signal });
     document.addEventListener('keydown', event => {
       if (event.key === 'Escape') {
+        if (editing && popup.contains(event.target)) {
+          event.preventDefault();
+          stopEditing();
+          return;
+        }
         if (popup.contains(document.activeElement)) button.focus({ preventScroll: true });
         close();
       } else outside(event);
     }, options);
     return () => { observer.disconnect(); lifetime.abort(); };
-  }, [anchor, close]);
+  }, [anchor, close, editing]);
 
-  return h('section', { ref: panel, className: 'dwe-favorites', 'aria-label': '收藏夹' },
+  return h('section', { ref: panel, className: 'dwe-favorites', 'aria-label': '收藏夹', 'data-editing': editing || undefined },
     h('header', null, h('strong', null, '收藏夹'),
-      h('button', { type: 'button', className: 'dwe-clear-favorites', disabled: !folders.length, onClick: clearFavorites }, '清空收藏')),
+      editing && h('button', { type: 'button', className: 'dwe-clear-favorites',
+        disabled: !folders.length, onClick: clearFavorites }, '清空收藏'),
+      editing ? h('button', { type: 'button', className: 'dwe-favorites-exit', onClick: stopEditing }, '退出')
+        : h('button', { type: 'button', className: 'dwe-tool dwe-favorites-edit', title: '编辑收藏夹',
+          'aria-label': '编辑收藏夹', onClick: () => setEditing(true) }, icon('favorites-edit', 18))),
     folders.length ? h('ul', { onDragLeave: event => {
       if (!event.currentTarget.contains(event.relatedTarget)) clearDropRow();
     } }, ...folders.map(path => {
       const name = path.length === 3 ? path.slice(0, 2) : path.split('\\').at(-1);
       return h('li', {
-        key: path, draggable: true,
+        key: path, draggable: editing,
         onDragStart: event => {
+          if (!editing) { event.preventDefault(); return; }
           dragged.current = path;
           event.dataTransfer.effectAllowed = 'move';
           event.dataTransfer.setData(dragType, path);
@@ -166,12 +185,14 @@ export function Favorites({ anchor, close, folders, navigate, currentPath, remov
         onDragEnd: resetDrag,
       },
         h('button', {
-          type: 'button', className: 'dwe-favorite-location', title: path, onClick: () => navigate(path),
-          disabled: workspaceMode && !underPath(path, root),
+          type: 'button', className: 'dwe-favorite-location', title: path,
+          'aria-disabled': editing || undefined,
+          onClick: editing ? undefined : () => navigate(path),
+          disabled: !editing && workspaceMode && !underPath(path, root),
           'aria-current': currentPath?.toLowerCase() === path.toLowerCase() ? 'location' : undefined,
-        }, h(primitives.FileTypeIcon, { kind: 'folder', size: 16 }),
+        }, fileIcon(name, 'directory'),
         h('span', { className: 'dwe-favorite-text' }, name)),
-        h('button', {
+        editing && h('button', {
           type: 'button', className: 'dwe-tool', title: '移除收藏', 'aria-label': '移除收藏 ' + name,
           onClick: () => removeFavorite(path),
         }, removeIcon));
