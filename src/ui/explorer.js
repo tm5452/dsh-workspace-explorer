@@ -345,13 +345,18 @@ function PreviewDivider({ root, ratio, setRatio }) {
 }
 
 export function Explorer({
-  cwd, sessionId, initialPath, initialWorkspaceRoot, bindFileActions, getTarget, onPath, openLocal, openDocument, openFolderTab,
+  cwd, sessionId, followWorkspace, saved, initialPath, initialWorkspaceRoot, initialPreviewOpen, favoritesDisplay,
+  workspaceButtonDisplay, bindFileActions, getTarget, onPath, openLocal,
+  openDocument, openFolderTab,
   openPreviewTab, refreshDirectories, updateRenamedPath, getInput, restoreMusicPreview,
 }) {
   const workspace = windowsPath(cwd);
-  const [localHistory, setLocalHistory] = useState(() => firstPath(initialPath === undefined ? workspace : initialPath));
-  const [scoped, setScoped] = useState(() => initialWorkspaceRoot
-    ? { root: initialWorkspaceRoot, history: firstPath(initialWorkspaceRoot) } : null);
+  const [localHistory, setLocalHistory] = useState(() => saved.state?.localHistory
+    ?? firstPath(initialPath === undefined ? workspace : initialPath));
+  const [scoped, setScoped] = useState(() => {
+    if (saved.state) return saved.state.scoped;
+    return initialWorkspaceRoot ? { root: initialWorkspaceRoot, history: firstPath(initialWorkspaceRoot) } : null;
+  });
   const workspaceMode = scoped !== null;
   const root = scoped?.root ?? null;
   const history = scoped?.history ?? localHistory;
@@ -361,9 +366,9 @@ export function Explorer({
   }, [workspaceMode]);
   const [revision, setRevision] = useState(0);
   const [listing, setListing] = useState(null);
-  const [selection, setSelection] = useState(emptySelection);
-  const [previewStack, setPreviewStack] = useState(emptyPreviewStack);
-  const [previewOpen, setPreviewOpen] = useState(true);
+  const [selection, setSelection] = useState(() => saved.state?.selection ?? emptySelection);
+  const [previewStack, setPreviewStack] = useState(() => saved.state?.previewStack ?? emptyPreviewStack);
+  const [previewOpen, setPreviewOpen] = useState(() => saved.state?.previewOpen ?? initialPreviewOpen);
   const [previewMusicActions, setPreviewMusicActions] = useState(null);
   const splitRatio = useSyncExternalStore(subscribeSplit, getSplitRatio);
   const [editor, setEditor] = useState(null);
@@ -390,7 +395,7 @@ export function Explorer({
   const pathField = useRef(null);
   const pathRequest = useRef(null);
   const resultToReveal = useRef(null);
-  const [search, setSearch] = useState('');
+  const [search, setSearch] = useState(() => saved.state?.search ?? '');
   const [searchResult, setSearchResult] = useState(null);
   const term = root ? search.trim() : '';
   const path = history.paths[history.index];
@@ -487,7 +492,16 @@ export function Explorer({
     setScoped(workspaceMode ? null : { root: workspace, history: firstPath(workspace) });
   }
 
+  useLayoutEffect(() => {
+    if (!followWorkspace || !workspaceMode || samePath(root, workspace)) return;
+    resetNavigation();
+    setScoped({ root: workspace, history: firstPath(workspace) });
+  }, [followWorkspace, workspaceMode, root, workspace, resetNavigation]);
+
   useLayoutEffect(() => { onPath(path, root); }, [onPath, path, root]);
+  useLayoutEffect(() => {
+    saved.state = { localHistory, scoped, selection, previewStack, previewOpen, search };
+  }, [saved, localHistory, scoped, selection, previewStack, previewOpen, search]);
 
   useEffect(() => {
     if (workspaceMode && !root) return;
@@ -517,6 +531,19 @@ export function Explorer({
 
   useEffect(() => () => pathRequest.current?.abort(), []);
   useLayoutEffect(() => { scroll.current.scrollTop = 0; }, [path, term]);
+  useLayoutEffect(() => {
+    const position = saved.scroll;
+    if (!position) return;
+    if (position.path !== path) {
+      delete saved.scroll;
+      return;
+    }
+    const list = scroll.current;
+    if (!list.querySelector('.dwe-entries')) return;
+    list.scrollTop = position.top;
+    list.scrollLeft = position.left;
+    delete saved.scroll;
+  }, [saved, path, ready, found]);
   useLayoutEffect(() => {
     const result = resultToReveal.current;
     if (!result || !ready || !samePath(result.folder, path) || !selection.names.has(result.name)) return;
@@ -811,6 +838,7 @@ export function Explorer({
           tool('star', favorited ? '取消收藏当前文件夹' : '收藏当前文件夹', () => toggleFavorite(path), !path, favorited)),
         h('button', {
           type: 'button', className: 'dwe-tool dwe-expanding-tool dwe-favorites-tool', 'aria-label': '收藏夹', 'data-dwe-tool': 'favorites',
+          'data-dwe-label-display': favoritesDisplay,
           ref: favoritesButton, 'aria-expanded': favoritesOpen, onClick: () => setFavoritesOpen(open => !open),
         }, h('span', { className: 'dwe-expanding-icon' }, icon('favorites')),
         h('span', { className: 'dwe-expanding-label', 'aria-hidden': true }, h('span', null, '收藏夹')))),
@@ -831,6 +859,7 @@ export function Explorer({
           h('span', { className: 'dwe-v-divider', 'aria-hidden': true }),
           h('button', {
             type: 'button', className: 'dwe-tool dwe-expanding-tool dwe-scope-tool', 'aria-label': '工作区内浏览',
+            'data-dwe-label-display': workspaceButtonDisplay,
             'aria-pressed': workspaceMode, disabled: !workspace && !workspaceMode,
             onClick: toggleWorkspaceMode,
           }, h('span', { className: 'dwe-expanding-icon' }, icon('workspace-scope')),

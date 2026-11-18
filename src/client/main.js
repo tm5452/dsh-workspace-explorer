@@ -1,4 +1,5 @@
 import { Explorer, ExplorerTitle } from '../ui/explorer.js';
+import { ExplorerPreferences } from '../ui/preferences.js';
 import { explorerCss } from '../ui/styles.js';
 import { scrollHorizontally } from '../ui/horizontal-wheel.js';
 import { parentOf, resourceAddress, samePath, sessionFilePath, underPath, windowsPath } from '../ui/navigation.js';
@@ -13,8 +14,10 @@ import { installSidebarFade } from './sidebar-fade.js';
 import { installSidebarTabInteractions } from './sidebar-tab-drag.js';
 import { installSidebarHeaderControls } from './sidebar-header-controls.js';
 import { installMouseGestures } from './mouse-gestures.js';
+import { createPreferences } from './preferences.js';
 import { cardIconMarkup, cardIconRatio, cardIconViewBox } from '../ui/card-icon.js';
 import { myPcIconMarkup, myPcIconRatio, myPcIconViewBox } from '../ui/my-pc-icon.js';
+import { icon } from '../ui/interface-icon.js';
 
 import { changedFileButton, installConversationDrop } from './conversation-drop.js';
 
@@ -32,6 +35,12 @@ const h = react.createElement;
 const instancePrefix = 'dsh-resource://workspace-explorer/tab/';
 const computerPrefix = instancePrefix + 'computer/';
 const changesReviewPrefix = 'dsh-resource://changes-review/session/';
+
+function browseGroup(tabScope, sessionId, workspace) {
+  if (tabScope === 'global') return 'global';
+  if (tabScope === 'workspace' && workspace) return 'workspace:' + workspace.toLowerCase();
+  return tabScope + ':session:' + sessionId;
+}
 
 /**
  * The guide card's 标志. Guide entries take an icon *component* (`entry.icon` is rendered as
@@ -60,15 +69,29 @@ function CardIcon({ size = 26, className, computer = false }) {
 function apply(ctx) {
   if (location.protocol !== 'dsh-app:' || location.hostname !== 'app') return;
   if (!navigator.platform.startsWith('Win')) return;
+  const preferences = createPreferences();
+  function Settings() { return h(ExplorerPreferences, { preferences }); }
+  function SettingsIcon({ size = 16 }) { return icon('settings-explorer', size); }
+  ctx.effect(() => ctx.slots.inject('settings.section', () => ctx.slots.register({
+    name: 'settings.section', id, label: () => '电脑文件资源管理器', order: 30,
+  }, Settings)));
+  ctx.effect(() => ctx.slots.inject('settings.section.icon', () => ctx.slots.register({
+    name: 'settings.section.icon', id,
+  }, SettingsIcon)));
+
   ctx.inject(['sidebarRightTabs', 'sidebarRight', 'remote', 'remote.session', 'remote.workspaceFiles', 'conversation', 'sessions'], (scope) => {
     const sidebar = scope.sidebarRight;
     const bindings = new Map();
     const folderTabs = new Map();
+    const inactiveGroups = new Map();
     const listeners = new Set();
     let viewList = [];
     let activeView;
     let presentedSession;
+    let presentedGroup;
     let workspace;
+    let guidePreviewOpen;
+    let lastPreviewOpen = true;
     let expanded;
     let fileFocused = false;
     let projecting = false;
@@ -96,12 +119,16 @@ function apply(ctx) {
       return sidebar.openTabs.getSnapshot().filter(tab => tab.sessionId === sessionId && tab.kind === tabKind);
     }
 
-    function createView(initialPath, initialWorkspaceRoot = null) {
+    function viewPreviewOpen(view) {
+      return view?.saved.state?.previewOpen ?? view?.initialPreviewOpen ?? lastPreviewOpen;
+    }
+
+    function createView(initialPath, initialWorkspaceRoot = null, initialPreviewOpen = viewPreviewOpen(activeView)) {
       const host = document.createElement('div');
       host.className = 'dwe-host';
       const address = (initialPath === null ? computerPrefix : instancePrefix) + crypto.randomUUID();
-      const view = { host, address, path: initialPath ?? null, initialPath,
-        initialWorkspaceRoot, workspaceRoot: initialWorkspaceRoot };
+      const view = { host, address, path: initialPath ?? null, initialPath, initialPreviewOpen,
+        initialWorkspaceRoot, workspaceRoot: initialWorkspaceRoot, saved: {} };
       view.getTarget = () => view.target;
       view.onPath = (path, root) => {
         if (view.path === path && view.workspaceRoot === root) return;
@@ -172,13 +199,17 @@ function apply(ctx) {
       }
       for (const tab of tabs) {
         if (bindings.has(tab.tabId)) continue;
-        const view = createView(tab.contentId?.startsWith(computerPrefix) ? null : folderTabs.get(tab.contentId) ?? workspace);
+        const path = tab.contentId?.startsWith(computerPrefix) ? null : folderTabs.get(tab.contentId) ?? workspace;
+        const view = createView(path, null, guidePreviewOpen);
         bindings.set(tab.tabId, view);
         added.push(view);
       }
       if (removed.size || added.length) {
         viewList = [...viewList.filter(view => !removed.has(view)), ...added];
-        if (removed.has(activeView)) activeView = undefined;
+        if (removed.has(activeView)) {
+          lastPreviewOpen = viewPreviewOpen(activeView);
+          activeView = undefined;
+        }
         notify();
       }
       rememberPresentation();
@@ -194,16 +225,21 @@ function apply(ctx) {
         return;
       }
       if (detached) return;
-      rememberOrder(presentedSession);
-      for (const view of viewList) {
-        if (!view.workspaceRoot) continue;
-        const list = view.host.querySelector('.dwe-list');
-        if (list?.getClientRects().length) view.handoffScroll = { path: view.path, top: list.scrollTop, left: list.scrollLeft };
-      }
+      captureDepartingViews();
       detached = true;
       if (expanded && viewList.length) beginHandoff();
       // The old native store is still adopted before React commits the session change.
       for (const tab of filesIn(presentedSession)) sidebar.closeIn?.(presentedSession, tab.tabId);
+    }
+
+    function captureDepartingViews() {
+      rememberOrder(presentedSession);
+      for (const view of viewList) {
+        const list = view.host.querySelector('.dwe-list');
+        if (list?.getClientRects().length && list.querySelector('.dwe-entries')) {
+          view.saved.scroll = { path: view.path, top: list.scrollTop, left: list.scrollLeft };
+        }
+      }
     }
 
     function beginHandoff() {
@@ -262,17 +298,35 @@ function apply(ctx) {
       return view;
     }
 
-    function present(sessionId, cwd) {
-      workspace = windowsPath(cwd) ?? undefined;
-      if (sessionId !== presentedSession || detached) {
-        const first = !presentedSession;
+    function present(sessionId, cwd, tabScope = preferences.get().tabScope) {
+      const nextWorkspace = windowsPath(cwd) ?? undefined;
+      const group = browseGroup(tabScope, sessionId, nextWorkspace);
+      const first = !presentedSession;
+      const groupChanged = !first && group !== presentedGroup;
+      if (groupChanged) {
+        if (!detached) captureDepartingViews();
+        const previous = { viewList, activeView };
+        const saved = inactiveGroups.get(group);
+        const pendingWorkspace = tabScope === 'workspace' && sessionId === presentedSession
+          && presentedGroup === browseGroup(tabScope, sessionId);
+        if (!pendingWorkspace || saved) inactiveGroups.set(presentedGroup, previous);
+        inactiveGroups.delete(group);
+        const target = saved ?? (pendingWorkspace ? previous : undefined);
+        const firstView = !target && tabScope !== 'global' && nextWorkspace && viewList.length
+          ? createView(nextWorkspace, activeView?.workspaceRoot ? nextWorkspace : null) : undefined;
+        viewList = target?.viewList ?? (firstView ? [firstView] : []);
+        activeView = target?.activeView ?? firstView;
+      }
+      presentedGroup = group;
+      workspace = nextWorkspace;
+      if (first || sessionId !== presentedSession || detached || groupChanged) {
         presentedSession = sessionId;
         detached = false;
         bindings.clear();
         if (first) {
           syncTabs();
         } else {
-          activeView = getOrCreateWorkspaceView() ?? activeView;
+          if (tabScope === 'global') activeView = getOrCreateWorkspaceView() ?? activeView;
           const nativeActive = sidebar.active();
           const preserveExpansion = expanded;
           projecting = true;
@@ -284,15 +338,16 @@ function apply(ctx) {
               const restoreTab = !fileFocused && nativeActive?.kind !== tabKind ? nativeActive?.id
                 : [...bindings].find(([, view]) => view === activeView)?.[0];
               if (restoreTab) sidebar.focus(restoreTab);
-              if (preserveExpansion !== undefined && sidebar.isExpanded() !== preserveExpansion) sidebar.toggleExpanded();
             }
+            if ((viewList.length || groupChanged) && preserveExpansion !== undefined
+                && sidebar.isExpanded() !== preserveExpansion) sidebar.toggleExpanded();
           } finally {
             projecting = false;
           }
           notify();
           rememberPresentation();
         }
-      } else {
+      } else if (tabScope === 'global') {
         // A newly mounted session's cwd can arrive after its sidebar is available.
         const view = getOrCreateWorkspaceView();
         if (!view || view === activeView) return;
@@ -398,10 +453,10 @@ function apply(ctx) {
           : [bindings.get(sidebar.active()?.id), activeView, ...visibleViews].find(isVisibleExplorer));
       if (!view) return;
       const { sessionId, paneId } = view.target;
-      return direction => {
+      return action => {
         if (!isVisibleExplorer(view) || view.target.sessionId !== sessionId || view.target.paneId !== paneId) return;
-        if (direction === 'up') view.fileActions.goUp();
-        else view.fileActions.historyStep(direction === 'left' ? -1 : 1);
+        if (action === 'up') view.fileActions.goUp();
+        else view.fileActions.historyStep(action === 'back' ? -1 : 1);
       };
     }
 
@@ -507,6 +562,22 @@ function apply(ctx) {
       };
     }
 
+    function installAddTabOrigin() {
+      const openTab = sidebar.openTab;
+      if (typeof openTab !== 'function') return () => {};
+      function open(kind, options) {
+        // DockKit opens the plus-button guide in a specific pane with revealIfOpened disabled.
+        if (kind === 'guide' && options?.paneId !== undefined && options.revealIfOpened === false) {
+          options = { ...options, params: { ...options.params, dweAddedFromPlus: true } };
+        }
+        return openTab.call(this, kind, options);
+      }
+      sidebar.openTab = open;
+      return () => {
+        if (sidebar.openTab === open) sidebar.openTab = openTab;
+      };
+    }
+
     function refreshDirectories(paths, moved = []) {
       const changed = new Set(paths.map(path => path.toLowerCase()));
       for (const view of viewList) {
@@ -533,13 +604,13 @@ function apply(ctx) {
         const target = { sessionId, paneId: panel.id, isFloating: panel.isFloating };
         view.target = target;
         element.appendChild(view.host);
-        const savedScroll = view.handoffScroll;
-        view.handoffScroll = undefined;
-        if (savedScroll?.path === view.path) {
+        const savedScroll = view.saved.scroll;
+        if (savedScroll && savedScroll.path === view.path) {
           const list = view.host.querySelector('.dwe-list');
-          if (list) {
+          if (list?.querySelector('.dwe-entries')) {
             list.scrollTop = savedScroll.top;
             list.scrollLeft = savedScroll.left;
+            delete view.saved.scroll;
           }
         }
         notify();
@@ -591,11 +662,15 @@ function apply(ctx) {
       return h(ExplorerTitle, { path, workspaceMode });
     }
 
-    function View({ view, cwd }) {
+    function View({ view, cwd, followWorkspace }) {
       const target = react.useSyncExternalStore(subscribe, view.getTarget);
       const sessionId = target?.sessionId;
+      const favoritesDisplay = react.useSyncExternalStore(preferences.subscribe, () => preferences.get().favoritesDisplay);
+      const workspaceButtonDisplay = react.useSyncExternalStore(preferences.subscribe, () => preferences.get().workspaceButtonDisplay);
       return reactDom.createPortal(h(Explorer, {
-        sessionId, cwd, initialPath: view.initialPath, initialWorkspaceRoot: view.initialWorkspaceRoot,
+        sessionId, cwd, followWorkspace, saved: view.saved,
+        initialPath: view.initialPath, initialWorkspaceRoot: view.initialWorkspaceRoot, initialPreviewOpen: view.initialPreviewOpen,
+        favoritesDisplay, workspaceButtonDisplay,
         getTarget: view.getTarget, bindFileActions: view.bindFileActions,
         onPath: view.onPath, openLocal, openDocument, openFolderTab, openPreviewTab, refreshDirectories, updateRenamedPath, getInput,
         restoreMusicPreview: file => restoreMusicPreview(file, view),
@@ -604,10 +679,19 @@ function apply(ctx) {
 
     function ExplorerGuide({ kind, title, description, useTabInfo }) {
       const { tab, panel } = useTabInfo();
+      function openFromGuide(open) {
+        if (tab.navigation?.params?.dweAddedFromPlus) guidePreviewOpen = preferences.get().newTabPreviewOpen;
+        try {
+          open();
+          syncTabs();
+        } finally {
+          guidePreviewOpen = undefined;
+        }
+      }
       return h('div', { className: 'dwe-guide-entry', 'data-sidebar-right-guide-entry': kind },
         h('button', { type: 'button', className: 'dwe-guide-main',
           onClick: () => {
-            tab.actions.openTab(tabKind, { replaceTab: true });
+            openFromGuide(() => tab.actions.openTab(tabKind, { replaceTab: true }));
             tab.actions.close();
           },
         },
@@ -617,21 +701,28 @@ function apply(ctx) {
           description !== undefined && h('span', { className: 'dwe-guide-description' }, description))),
         h('button', { type: 'button', className: 'dwe-guide-computer', title: '打开此电脑',
           'aria-label': '打开此电脑',
-          onClick: () => sidebar.openResource(computerPrefix + crypto.randomUUID(), {
+          onClick: () => openFromGuide(() => sidebar.openResource(computerPrefix + crypto.randomUUID(), {
             kind: tabKind, paneId: panel.id, replaceTab: tab.id,
-          }),
+          })),
         }, h(CardIcon, { computer: true })));
     }
 
     function Keeper({ useSessions }) {
       const sessionId = react.useSyncExternalStore(sidebar.mounted.subscribe, sidebar.mounted.getSnapshot);
       const currentViews = react.useSyncExternalStore(subscribe, () => viewList);
+      const currentGroup = react.useSyncExternalStore(subscribe, () => presentedGroup);
+      const currentWorkspace = react.useSyncExternalStore(subscribe, () => workspace);
       const cwd = useSessions(state => sessionId ? state.byId[sessionId]?.cwd : undefined);
+      const tabScope = react.useSyncExternalStore(preferences.subscribe, () => preferences.get().tabScope);
+      const followsWorkspace = currentGroup !== undefined && currentGroup !== 'global';
+      // A departing group must finish with its own workspace before the incoming views mount.
+      const viewCwd = sessionId === presentedSession && browseGroup(tabScope, sessionId, windowsPath(cwd)) === currentGroup
+        ? cwd : currentWorkspace;
       react.useLayoutEffect(() => {
-        if (sessionId && sidebar.mounted.getSnapshot() === sessionId) present(sessionId, cwd);
-      }, [sessionId, cwd]);
+        if (sessionId && sidebar.mounted.getSnapshot() === sessionId) present(sessionId, cwd, tabScope);
+      }, [sessionId, cwd, tabScope]);
       return h(react.Fragment, null, h(MusicCapsule, { sessionId }),
-        currentViews.map(view => h(View, { key: view.address, view, cwd })));
+        currentViews.map(view => h(View, { key: view.address, view, cwd: viewCwd, followWorkspace: followsWorkspace })));
     }
 
     scope.effect(() => {
@@ -641,7 +732,7 @@ function apply(ctx) {
       document.head.appendChild(style);
       function wheel(event) {
         if (!(event.target instanceof Element)) return;
-        const scroller = event.target.closest('.dwe-path, .dwe-preview-tabs');
+        const scroller = event.target.closest('.dwe-path, .dwe-preview-tabs, .dwe-toolbar');
         if (scroller) scrollHorizontally(event, scroller);
         else {
           const strip = event.target.closest('[data-dockkit-strip-tabs]');
@@ -650,8 +741,21 @@ function apply(ctx) {
       }
       document.addEventListener('wheel', wheel, { passive: false, capture: true });
       const disposeFileOpener = installFileOpener();
+      const disposeAddTabOrigin = installAddTabOrigin();
       const disposeConversationPathDrop = installConversationPathDrop(sidebar.mounted, getInput);
-      const disposeMouseGestures = installMouseGestures(gestureAction, gestureBadgeBounds);
+      let disposeMouseGestures;
+      function syncGestures() {
+        if (preferences.get().gesturesEnabled) {
+          disposeMouseGestures ??= installMouseGestures(gestureAction, gestureBadgeBounds,
+            direction => preferences.get().gestures[direction]);
+        } else {
+          disposeMouseGestures?.();
+          disposeMouseGestures = undefined;
+        }
+      }
+      syncGestures();
+      const disposePreferences = preferences.subscribe(syncGestures);
+      window.addEventListener('storage', preferences.onStorage);
       const disposeMotion = installSidebarMotion(sidebar);
       const disposeSidebarClose = installSidebarClose(sidebar, () => projecting || detached);
       const disposeSidebarFade = installSidebarFade(sidebar);
@@ -662,8 +766,11 @@ function apply(ctx) {
       return () => {
         stopMusic();
         disposeFileOpener();
+        disposeAddTabOrigin();
         disposeConversationPathDrop();
-        disposeMouseGestures();
+        disposePreferences();
+        disposeMouseGestures?.();
+        window.removeEventListener('storage', preferences.onStorage);
         disposeMotion();
         disposeSidebarClose();
         disposeSidebarFade();
