@@ -2,7 +2,7 @@
 
 在 DeepSeek Harness 右侧栏浏览本机磁盘和会话工作区，快速预览文件，或把文件拖进对话。新版界面融入 DSH 的亮色和深色主题，更新了文件图标与多标签交互。支持图片缩放、视频全屏播放、音乐胶囊和常用大文件的按需预览。插件适用于 Windows 桌面端，按当前 Windows 账户权限访问文件。
 
-安装后，从右侧栏的「+」选择「电脑文件资源管理器」。[查看 1.2.0 更新说明](CHANGELOG.md#v120--界面重构与交互优化)
+安装后，从右侧栏的「+」选择「电脑文件资源管理器」。[查看 1.2.1 更新说明](CHANGELOG.md#v121--侧栏交互优化与批处理修复)
 
 ## 安装
 
@@ -21,7 +21,7 @@ dsh plugin --profile web add dsh-workspace-explorer
 在 Harness 的「插件 → 添加插件」中粘贴下方安装包链接，也可粘贴已下载的本地 `.tgz` 路径：
 
 ```text
-https://github.com/tm5452/dsh-workspace-explorer/releases/download/v1.2.0/dsh-workspace-explorer-1.2.0.tgz
+https://github.com/tm5452/dsh-workspace-explorer/releases/download/v1.2.1/dsh-workspace-explorer-1.2.1.tgz
 ```
 
 从本地测试包或目录链接安装的用户，可先在插件列表移除旧条目，再安装正式版。发布变更见 [版本记录](CHANGELOG.md)。

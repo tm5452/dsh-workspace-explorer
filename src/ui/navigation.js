@@ -19,6 +19,10 @@ export function windowsPath(value) {
   return normalized.length > 3 ? normalized.replace(/\\+$/, '') : normalized;
 }
 
+export function isWindowsBatch(path) {
+  return /\.(bat|cmd)$/i.test(path);
+}
+
 export function parentOf(path) {
   if (path === null || path.length <= 3) return null;
   return path.slice(0, Math.max(3, path.lastIndexOf('\\')));

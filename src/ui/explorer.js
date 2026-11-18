@@ -1,4 +1,4 @@
-import { joinPath, move, parentOf, renamePath, resourceAddress, samePath, underPath, visit, windowsPath } from './navigation.js';
+import { isWindowsBatch, joinPath, move, parentOf, renamePath, resourceAddress, samePath, underPath, visit, windowsPath } from './navigation.js';
 import { Preview, PreviewBoundary } from './preview.js';
 import { formatSize } from './file-size.js';
 import { disks } from './workspace.js';
@@ -195,7 +195,7 @@ function pathName(path) {
   return path.length === 3 ? path.slice(0, 2) : path.split('\\').at(-1);
 }
 
-function Breadcrumb({ path, navigate, dragFolder, workspaceMode, root }) {
+function Breadcrumb({ path, navigate, dragFolder, showPathMenu, workspaceMode, root }) {
   const ref = useRef(null);
   useLayoutEffect(() => {
     const node = ref.current;
@@ -219,12 +219,14 @@ function Breadcrumb({ path, navigate, dragFolder, workspaceMode, root }) {
   h('button', {
     type: 'button', onClick: () => navigate(root), 'aria-current': crumbs.length === 0 ? 'location' : undefined,
     disabled: workspaceMode && !root,
+    onContextMenu: root ? event => showPathMenu(event, root) : undefined,
     draggable: Boolean(root), onDragStart: root ? event => dragFolder(event, root) : undefined,
   }, root ? fileIcon('', 'directory') : icon('drive'), baseLabel),
   ...crumbs.map(destination => h('span', { key: destination, className: 'dwe-crumb' },
     icon('chevron', 16),
     h('button', {
       type: 'button', onClick: () => navigate(destination), title: destination,
+      onContextMenu: event => showPathMenu(event, destination),
       draggable: true, onDragStart: event => dragFolder(event, destination),
       'aria-current': destination === path ? 'location' : undefined,
     }, pathName(destination)))));
@@ -594,7 +596,8 @@ export function Explorer({
     try {
       const file = await disks.locate(path, undefined, root);
       if (file.type !== 'file') throw new Error('请选择普通文件');
-      await openLocal(file.nativePath);
+      if (isWindowsBatch(file.nativePath)) await disks.openBatch(path, root);
+      else await openLocal(file.nativePath);
     } catch (error) {
       setActionError('无法用 Windows 打开文件 · ' + (error?.message || String(error)));
     }
@@ -614,6 +617,14 @@ export function Explorer({
     if (entry && !keepSelection) setSelection(singleSelection(entry.name));
     setMenu({ entry, absolute, entries: keepSelection ? selectedEntries : entry ? [entry] : [], x: event.clientX, y: event.clientY,
       focus: event.target.closest?.('.dwe-row') ?? scroll.current });
+  }
+
+  function showPathMenu(event, destination) {
+    event.preventDefault();
+    event.stopPropagation();
+    const entry = { name: pathName(destination), type: 'directory', path: destination };
+    setMenu({ source: 'breadcrumb', entry, absolute: destination, entries: [entry],
+      x: event.clientX, y: event.clientY, focus: event.currentTarget });
   }
 
   const folderTarget = menu?.entry?.type === 'directory' || menu?.entry?.type === 'drive';
@@ -796,7 +807,7 @@ export function Explorer({
               value: editor, onChange: event => { setEditor(event.target.value); setPathError(''); },
               readOnly: locating, spellCheck: false,
             }))
-            : h(Breadcrumb, { path, navigate, dragFolder, workspaceMode, root }),
+            : h(Breadcrumb, { path, navigate, dragFolder, showPathMenu, workspaceMode, root }),
           tool('star', favorited ? '取消收藏当前文件夹' : '收藏当前文件夹', () => toggleFavorite(path), !path, favorited)),
         h('button', {
           type: 'button', className: 'dwe-tool dwe-expanding-tool dwe-favorites-tool', 'aria-label': '收藏夹', 'data-dwe-tool': 'favorites',
@@ -922,8 +933,10 @@ export function Explorer({
           }))
           : h('p', { className: 'dwe-preview-hint' }, '单击一个文件进行预览'))),
     sessionId && menu && h(FileMenu, { menu, close: closeMenu, invoke: runMenuAction, groups: [
-      { label: '对话框操作', items: conversationActions },
-      { label: '文件管理', items: actions },
+      { label: '对话框操作', items: menu.source === 'breadcrumb'
+        ? conversationActions.filter(({ id }) => id === 'composer-path') : conversationActions },
+      { label: '文件管理', items: menu.source === 'breadcrumb'
+        ? actions.filter(({ id }) => id === 'reveal' || id === 'path') : actions },
     ] }),
     sessionId && renaming && h(RenameDialog, { entry: renaming, close: () => setRenaming(null), rename: renameEntry }),
     sessionId && deleting && h(DeleteDialog, { entries: deleting, close: () => setDeleting(null), remove: deleteEntry }),

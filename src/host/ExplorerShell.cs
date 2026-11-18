@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Runtime.InteropServices;
 
 public static class ExplorerShell {
@@ -7,6 +8,28 @@ public static class ExplorerShell {
 
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern bool MoveFileEx(string source, string destination, uint flags);
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct ShellExecuteInfo {
+        public uint Size;
+        public uint Mask;
+        public IntPtr Window;
+        public string Verb;
+        public string File;
+        public string Parameters;
+        public string Directory;
+        public int Show;
+        public IntPtr Instance;
+        public IntPtr IdList;
+        public string ClassName;
+        public IntPtr ClassKey;
+        public uint HotKey;
+        public IntPtr IconOrMonitor;
+        public IntPtr Process;
+    }
+
+    [DllImport("shell32.dll", EntryPoint = "ShellExecuteExW", CharSet = CharSet.Unicode, ExactSpelling = true, SetLastError = true)]
+    private static extern bool ShellExecuteEx(ref ShellExecuteInfo info);
 
     [DllImport("user32.dll")]
     public static extern uint GetClipboardSequenceNumber();
@@ -49,6 +72,21 @@ public static class ExplorerShell {
 
     public static int Rename(string source, string destination) {
         return MoveFileEx(source, destination, 0) ? 0 : Marshal.GetLastWin32Error();
+    }
+
+    public static int OpenBatch(string source) {
+        const uint noAsync = 0x100;
+        const int showNormal = 1;
+        var info = new ShellExecuteInfo {
+            Size = (uint)Marshal.SizeOf(typeof(ShellExecuteInfo)),
+            Mask = noAsync,
+            File = source,
+            Directory = Path.GetDirectoryName(source),
+            Show = showNormal,
+        };
+        if (ShellExecuteEx(ref info)) return 0;
+        int error = Marshal.GetLastWin32Error();
+        return error != 0 ? error : 31;
     }
 
     public static void ClearClipboardIfUnchanged(uint sequence) {

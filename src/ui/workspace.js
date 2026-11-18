@@ -18,6 +18,7 @@ async function request(operation, path, signal, workspace, fields) {
 export const disks = {
   list: (path, signal, root) => request('list', path, signal, root),
   locate: (path, signal, root) => request('locate', path, signal, root),
+  openBatch: (path, root) => request('open-batch', path, undefined, root),
   read: (path, signal, root) => request('text', path, signal, root),
   readTextWindow: (path, signal, root, cursor, line) => request('text-window', path, signal, root, { cursor, line }),
   readBytes: (path, signal, root) => request('bytes', path, signal, root),

@@ -7,7 +7,7 @@ import { promisify } from 'node:util';
 import { officeExtensions } from '../document-types.js';
 import { thumbnailType } from '../thumbnail-types.js';
 import { audioType } from '../audio-types.js';
-import { underPath } from '../ui/navigation.js';
+import { isWindowsBatch, underPath } from '../ui/navigation.js';
 import { registerPdfAssets } from './pdf-assets.js';
 import { windowsFileOperation } from './shell-files.js';
 
@@ -742,6 +742,18 @@ export function registerDesktopFiles(ctx, getOfficeConverter = () => undefined) 
         const workspace = root === undefined || usesTicket ? undefined : await disks.scope(root, signal);
         if (operation === 'list') return json(await disks.list(input, signal, workspace));
         if (operation === 'locate') return json(await disks.locate(input, signal, workspace));
+        if (operation === 'open-batch') {
+          await write(async () => {
+            const file = await disks.locate(input, signal, workspace);
+            if (file.type !== 'file' || !isWindowsBatch(file.nativePath)) {
+              throw new BrowseError('请选择 .bat 或 .cmd 批处理文件');
+            }
+            signal.throwIfAborted();
+            const { code } = await windowsFileOperation({ action: 'openBatch', source: file.nativePath });
+            if (code !== 0 && code !== 1223) throw new BrowseError('Windows 无法启动此批处理文件（' + code + '）', 409);
+          });
+          return json({ ok: true });
+        }
         if (operation === 'document-preview' || operation === 'image-preview') {
           const path = normalizeLocalPath(input);
           const extension = path.slice(path.lastIndexOf('.') + 1).toLowerCase();

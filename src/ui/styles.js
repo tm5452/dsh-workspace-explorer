@@ -278,20 +278,31 @@ body[data-ds-dark-theme] [data-dwe-interface-icon="file-folder-workspace"] > rec
   position: absolute; inset-inline-end: 0; inline-size: max-content;
   visibility: hidden; pointer-events: none;
 }
-.dwe-sidebar-header-controls {
-  display: flex; align-items: center; gap: 3px;
+[data-conversation-header-corner]:has(> .dwe-sidebar-header-controls) {
+  --dwe-sidebar-control-size: 29px;
+  position: relative; align-self: stretch;
+  padding-inline-end: var(--dwe-sidebar-control-size);
+  margin-inline-end: -20px;
 }
-[data-conversation-header-corner]:not(:first-child):is(:has(.dwe-sidebar-header-controls), :has([data-sidebar-right-expand]:not(:disabled)))::before {
+.dwe-sidebar-header-controls {
+  position: absolute; z-index: 2; inset-inline-end: 0;
+  inset-block-start: calc((100% - var(--dwe-sidebar-control-size)) / 2);
+  display: flex; flex-direction: column; align-items: center; gap: 3px;
+}
+[data-conversation-header-corner]:not(:first-child):has([data-sidebar-right-expand]:not(:disabled))::before {
   content: ''; flex: 0 0 1px; height: 15px; margin-inline-end: 6px;
   background: #D6D6D6;
 }
 .dwe-sidebar-header-controls > button {
-  display: grid; place-items: center; flex: none; width: 29px; height: 29px; padding: 0;
-  border: 0; border-radius: 8px; background: transparent; color: #64696E;
-  cursor: default;
+  display: grid; place-items: center; flex: none; box-sizing: border-box; padding: 0;
+  inline-size: var(--dwe-sidebar-control-size); block-size: var(--dwe-sidebar-control-size);
+  border: 1px solid var(--dwe-line); border-radius: var(--dwe-ui-radius);
+  background: var(--dsw-alias-bg-base, Canvas); color: #64696E; cursor: default;
 }
 .dwe-sidebar-header-controls > button[hidden] { display: none; }
 .dwe-sidebar-header-controls > button:disabled { color: #C0C2C4; }
+body[data-ds-dark-theme] .dwe-sidebar-header-controls > button { color: #C0C2C4; }
+body[data-ds-dark-theme] .dwe-sidebar-header-controls > button:disabled { color: #64696E; }
 .dwe-sidebar-header-controls > button:hover:not(:disabled) {
   background: var(--dsw-alias-interactive-bg-hover, #8882);
 }
@@ -426,10 +437,10 @@ body[data-ds-dark-theme] [data-dwe-interface-icon="file-folder-workspace"] > rec
 .dwe-columns { display: grid; grid-template-columns: minmax(0, 1fr) 94px 70px; align-items: center; }
 .dwe-columns > span { padding-inline: 8px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dwe-head {
-  --dwe-rule-inset: 0px;
-  position: sticky; top: 0; z-index: 1; margin-inline: var(--dwe-panel-inset); padding: 5px 0; font-size: 12px;
-  background-color: var(--dsw-alias-bg-base, Canvas); border-bottom: 1px solid transparent;
+  position: sticky; top: 0; z-index: 1; padding: 5px var(--dwe-panel-inset); font-size: 12px;
+  border-bottom: 1px solid transparent;
 }
+.dwe-head > span { color: color-mix(in srgb, currentColor 80%, transparent); }
 .dwe-head > span:first-child { padding-inline-start: 0; }
 .dwe-head span + span { border-inline-start: 1px solid var(--dwe-line); }
 .dwe-columns > span:last-child { text-align: end; }
@@ -500,11 +511,19 @@ body[data-ds-dark-theme] [data-dwe-interface-icon="file-folder-workspace"] > rec
   height: var(--dwe-preview-bar-height);
   pointer-events: none;
 }
-.dwe-preview-bar::before {
+:is(.dwe-head, .dwe-preview-bar) { --dwe-header-rgb: 255 255 255; }
+body[data-ds-dark-theme] :is(.dwe-head, .dwe-preview-bar) { --dwe-header-rgb: 21 21 23; }
+:is(.dwe-head, .dwe-preview-bar)::before, :is(.dwe-head, .dwe-preview-bar)::after {
   content: ''; position: absolute; z-index: -1; inset: 0;
-  background-color: rgb(255 255 255 / 25%); backdrop-filter: blur(3px);
 }
-body[data-ds-dark-theme] .dwe-preview-bar::before { background-color: rgb(21 21 23 / 25%); }
+:is(.dwe-head, .dwe-preview-bar)::before {
+  background: linear-gradient(to bottom, rgb(var(--dwe-header-rgb)), rgb(var(--dwe-header-rgb) / 25%));
+  backdrop-filter: blur(3px);
+}
+:is(.dwe-head, .dwe-preview-bar)::after {
+  z-index: -2; backdrop-filter: blur(20px);
+  mask-image: linear-gradient(to bottom, #000 50%, transparent);
+}
 .dwe-preview-bar > :is(.dwe-preview-label, .dwe-preview-tabs, .dwe-preview-actions) { pointer-events: auto; }
 .dwe-preview-bar + .dwe-preview-body:has(> :is(.dwe-image-scroll, .dwe-video-overlay, .dwe-pdf-scroll)),
 .dwe-preview-bar + .dwe-preview-body:has(> .dwe-text-file > .dwe-text) {

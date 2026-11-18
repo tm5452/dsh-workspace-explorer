@@ -54,6 +54,9 @@ switch ($request.action) {
     'rename' {
         @{ code = [ExplorerShell]::Rename($request.source, $request.destination) } | ConvertTo-Json -Compress
     }
+    'openBatch' {
+        @{ code = [ExplorerShell]::OpenBatch($request.source) } | ConvertTo-Json -Compress
+    }
     'recycle' {
         $results = @(foreach ($source in $request.sources) {
             try { [ExplorerShell]::Recycle($source) }
@@ -100,7 +103,7 @@ function startWorker() {
     send(request) {
       clearTimeout(idle);
       if (pending) return Promise.reject(new Error('Windows 文件操作仍在进行'));
-      const timeout = ['transfer', 'recycle'].includes(request.action) ? 300_000 : 15_000;
+      const timeout = ['transfer', 'recycle', 'openBatch'].includes(request.action) ? 300_000 : 15_000;
       return new Promise((resolve, reject) => {
         const timer = setTimeout(() => {
           stop(Object.assign(new Error('Windows 文件操作超时，请检查已有结果后重试'), { code: 'ETIMEDOUT' }));
