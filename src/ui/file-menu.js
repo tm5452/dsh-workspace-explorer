@@ -1,4 +1,4 @@
-const { createElement: h, useEffect, useLayoutEffect, useRef, useState } = react;
+const { createElement: h, Fragment, useLayoutEffect, useRef, useState } = react;
 
 export function FileMenu({ menu, groups, close, invoke }) {
   const root = useRef(null);
@@ -11,17 +11,32 @@ export function FileMenu({ menu, groups, close, invoke }) {
     (node.querySelector('button:not(:disabled)') ?? node).focus({ preventScroll: true });
   }, [menu]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
+    const node = root.current;
     const controller = new AbortController();
     const options = { capture: true, signal: controller.signal };
     function outside(event) {
-      if (!root.current?.contains(event.target)) close();
+      const panel = event.target.closest?.('.dwe-file-menu-panel');
+      if (!panel || !node.contains(panel)) close();
     }
     document.addEventListener('pointerdown', outside, options);
+    document.addEventListener('click', outside, options);
+    document.addEventListener('focusin', outside, options);
     document.addEventListener('wheel', outside, options);
+    // Focus moves to the embedded document when a click lands in a preview iframe.
+    window.addEventListener('blur', close, { signal: controller.signal });
     window.addEventListener('resize', close, options);
     return () => controller.abort();
   }, [close]);
+
+  const panels = groups.filter(group => group.items.length).map(({ label, items }) =>
+    h('div', { className: 'dwe-file-menu-panel', key: label, role: 'group', 'aria-label': label },
+      ...items.map((item, index) => h(Fragment, { key: item.id },
+        index > 0 && item.id === 'reveal' && h('div', { className: 'dwe-file-menu-divider', role: 'separator' }),
+        h('button', {
+          type: 'button', role: 'menuitem', disabled: item.disabled, 'data-dwe-action': item.id,
+          onClick: () => invoke(item.id),
+        }, item.icon, h('span', null, item.label))))));
 
   return reactDom.createPortal(h('div', {
     ref: root, className: 'dwe-file-menu', role: 'menu', 'aria-label': '文件操作', tabIndex: -1,
@@ -44,12 +59,7 @@ export function FileMenu({ menu, groups, close, invoke }) {
       event.preventDefault();
       event.stopPropagation();
     },
-  }, ...groups.filter(group => group.items.length).map(({ label, items }) =>
-    h('div', { className: 'dwe-file-menu-panel', key: label, role: 'group', 'aria-label': label },
-      ...items.map(item => h('button', {
-        type: 'button', role: 'menuitem', key: item.id, disabled: item.disabled, 'data-dwe-action': item.id,
-        onClick: () => invoke(item.id),
-      }, item.icon, item.label))))), document.body);
+  }, ...panels), document.body);
 }
 
 export function DeleteDialog({ entries, close, remove }) {

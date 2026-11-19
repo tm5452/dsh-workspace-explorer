@@ -1,6 +1,7 @@
 import { disks } from './workspace.js';
 import { PreviewUnavailable } from './preview-unavailable.js';
 import { previewTopInset } from './preview-zoom.js';
+import { selectionElement, selectionOffset, usePreviewQuote } from './preview-quote.js';
 
 const { createElement: h, useEffect, useLayoutEffect, useMemo, useRef, useState } = react;
 const chunkSize = 2048;
@@ -26,7 +27,7 @@ function textChunks(text) {
     else if (end < text.length && /[\uDC00-\uDFFF]/u.test(text[end])) end--;
     const value = text.slice(start, end).replace(/\r$/u, '');
     const lengths = value.split('\n').map(line => line.length);
-    chunks.push({ value, lengths, firstLine });
+    chunks.push({ value, lengths, firstLine, start });
     firstLine += lengths.length - Number(!atBreak);
     start = end + Number(atBreak);
   }
@@ -44,7 +45,14 @@ function chunkAt(offsets, position) {
   return from;
 }
 
-function TextPreview({ text, eof, file, onReachEnd }) {
+function sourcePosition(text, offset, firstLine, firstColumn) {
+  const lines = text.slice(0, offset).split('\n');
+  const line = firstLine + lines.length - 1;
+  const column = (lines.length === 1 ? firstColumn : 1) + lines.at(-1).length;
+  return `第 ${line} 行第 ${column} 列`;
+}
+
+function TextPreview({ text, eof, file, onReachEnd, surface, onQuote, firstLine, firstColumn }) {
   const viewport = useRef(null);
   const heightCache = useRef(new Map());
   const pendingLine = useRef(null);
@@ -52,6 +60,23 @@ function TextPreview({ text, eof, file, onReachEnd }) {
   const [top, setTop] = useState(0);
   const [revision, setRevision] = useState(0);
   const chunks = useMemo(() => textChunks(text || '（空文件）'), [text]);
+  const quoteButton = usePreviewQuote(surface, onQuote, selection => {
+    if (!text || !selection?.rangeCount || selection.isCollapsed) return;
+    const range = selection.getRangeAt(0);
+    function offset(node, position) {
+      const row = selectionElement(node)?.closest('[data-text-chunk]');
+      if (!row || !viewport.current?.contains(row)) return;
+      const chunk = chunks[Number(row.dataset.textChunk)];
+      return chunk.start + Math.min(chunk.value.length, selectionOffset(row, node, position));
+    }
+    const start = offset(range.startContainer, range.startOffset);
+    const end = offset(range.endContainer, range.endOffset);
+    if (start === undefined || end === undefined || end <= start) return;
+    const from = sourcePosition(text, start, firstLine, firstColumn);
+    const to = sourcePosition(text, end - 1, firstLine, firstColumn);
+    return { text: text.slice(start, end), location: from === to ? from : from + '至' + to,
+      rect: range.getClientRects()[0] };
+  });
   const offsets = useMemo(() => {
     const result = [0];
     for (const chunk of chunks) {
@@ -129,7 +154,7 @@ function TextPreview({ text, eof, file, onReachEnd }) {
     }
   }, [chunks, first, last, offsets, file.line]);
 
-  return h('div', { ref: viewport, className: 'dwe-text', tabIndex: 0, 'aria-label': '文本预览',
+  return h(react.Fragment, null, h('div', { ref: viewport, className: 'dwe-text', tabIndex: 0, 'aria-label': '文本预览',
     onScroll: event => {
       const node = event.currentTarget;
       setTop(node.scrollTop);
@@ -139,10 +164,11 @@ function TextPreview({ text, eof, file, onReachEnd }) {
   ...chunks.slice(first, last).map((chunk, index) => h('div', { key: first + index, 'data-text-chunk': first + index },
     !chunk.value || chunk.value.endsWith('\n') ? chunk.value + '\u200b' : chunk.value)),
   h('div', { style: { height: offsets.at(-1) - offsets[last] }, 'aria-hidden': true }),
-  !eof && h('p', { className: 'dwe-text-limit' }, '… 仅显示文件开头，可在原生预览中继续查看'));
+  !eof && h('p', { className: 'dwe-text-limit' }, '… 仅显示文件开头，可在原生预览中继续查看')), quoteButton);
 }
 
-export function TextFilePreview({ file, root, standalone }) {
+export function TextFilePreview({ file, root, standalone, onQuote }) {
+  const surface = useRef(null);
   const [cursors, setCursors] = useState([null]);
   const [index, setIndex] = useState(0);
   const [result, setResult] = useState(null);
@@ -170,10 +196,10 @@ export function TextFilePreview({ file, root, standalone }) {
     setIndex(index + 1);
   }
 
-  return h('div', { className: 'dwe-text-file' },
+  return h('div', { className: 'dwe-text-file', ref: surface },
     page ? h(TextPreview, {
       key: index, text: page.text, eof: page.eof ?? true, file: page.legacy ? file : {},
-      onReachEnd: next,
+      firstLine: page.firstLine ?? 1, firstColumn: page.firstColumn ?? 1, onReachEnd: next, surface, onQuote,
     }) : failed ? h(PreviewUnavailable, { standalone })
       : h('p', { className: 'dwe-preview-hint', role: 'status' }, '正在读取文本…'),
     (index > 0 || page?.next) && h('div', { className: 'dwe-text-pages', 'aria-label': '文本分段' },

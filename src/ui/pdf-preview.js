@@ -43,10 +43,10 @@ const pageBatch = 24;
 const PdfPage = react.memo(function PdfPage({ pdf, number, initialSize, width, visible, renderZoom }) {
   const [size, setSize] = useState(initialSize);
   const [failed, setFailed] = useState(false);
-  const canvas = useRef(null);
+  const bitmapHost = useRef(null);
   useEffect(() => {
     if (!visible) return;
-    const surface = canvas.current;
+    const host = bitmapHost.current;
     let canceled = false;
     let page;
     let task;
@@ -58,15 +58,19 @@ const PdfPage = react.memo(function PdfPage({ pdf, number, initialSize, width, v
         setSize({ width: natural.width, height: natural.height });
         const pageViewport = page.getViewport({ scale: Math.min(width / natural.width, 2) * renderZoom });
         const pixels = Math.min(window.devicePixelRatio || 1, 4096 / Math.max(pageViewport.width, pageViewport.height));
-        surface.width = Math.max(1, Math.floor(pageViewport.width * pixels));
-        surface.height = Math.max(1, Math.floor(pageViewport.height * pixels));
+        // Retain the displayed page during zoom until PDF.js finishes drawing its replacement.
+        const bitmap = host.ownerDocument.createElement('canvas');
+        bitmap.width = Math.max(1, Math.floor(pageViewport.width * pixels));
+        bitmap.height = Math.max(1, Math.floor(pageViewport.height * pixels));
         task = page.render({
-          canvas: surface, viewport: pageViewport, transform: [pixels, 0, 0, pixels, 0, 0],
+          canvas: bitmap, viewport: pageViewport, transform: [pixels, 0, 0, pixels, 0, 0],
         });
         await task.promise;
-        if (!canceled) setFailed(false);
+        if (canceled) return;
+        host.replaceChildren(bitmap);
+        setFailed(false);
       } catch {
-        if (!canceled) setFailed(true);
+        if (!canceled && !host.firstChild) setFailed(true);
       }
     }
     void render();
@@ -81,7 +85,7 @@ const PdfPage = react.memo(function PdfPage({ pdf, number, initialSize, width, v
   return h('div', {
     className: 'dwe-pdf-page', 'data-pdf-page': number, 'data-dwe-zoom-surface': '',
     style: { '--dwe-fit-width': displayWidth + 'px', '--dwe-fit-height': displayWidth * size.height / size.width + 'px' },
-  }, visible && h('canvas', { ref: canvas, role: 'img', 'aria-label': '文档第 ' + number + ' 页', hidden: failed }),
+  }, visible && h('div', { ref: bitmapHost, className: 'dwe-pdf-bitmap', role: 'img', 'aria-label': '文档第 ' + number + ' 页', hidden: failed }),
   failed && h('p', { className: 'dwe-preview-hint' }, '第 ' + number + ' 页无法显示'));
 });
 

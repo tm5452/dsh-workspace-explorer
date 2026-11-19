@@ -1,20 +1,30 @@
 import { Explorer, ExplorerTitle } from '../ui/explorer.js';
+import { ExplorerPreferences } from '../ui/preferences.js';
 import { explorerCss } from '../ui/styles.js';
 import { scrollHorizontally } from '../ui/horizontal-wheel.js';
 import { parentOf, resourceAddress, samePath, sessionFilePath, underPath, windowsPath } from '../ui/navigation.js';
 import { renameFavorites } from '../ui/favorites.js';
 import { installConversationPathDrop } from '../ui/composer-drop.js';
+import { insertPreviewQuote } from '../ui/preview-quote.js';
+import { MessageQuote, quoteNodeId, quoteRule } from '../ui/quote-message.js';
+import { disks } from '../ui/workspace.js';
 import { FilePreviewTab, FilePreviewTitle, previewTabAddress, previewTabLabel } from '../ui/preview-tab.js';
+import { openNativePreview, parkPreview } from '../ui/preview-surface.js';
 import { MusicCapsule } from '../ui/music-preview.js';
 import { stopMusic } from '../ui/music-player.js';
 import { installSidebarMotion } from './sidebar-motion.js';
+import { installSidebarWidth } from './sidebar-width.js';
 import { installSidebarClose } from './sidebar-close.js';
 import { installSidebarFade } from './sidebar-fade.js';
 import { installSidebarTabInteractions } from './sidebar-tab-drag.js';
 import { installSidebarHeaderControls } from './sidebar-header-controls.js';
+import { createPreviewWindows, PREVIEW_WINDOW_KIND, PreviewWindowTitle } from './preview-windows.js';
 import { installMouseGestures } from './mouse-gestures.js';
+import { createPreferences } from './preferences.js';
 import { cardIconMarkup, cardIconRatio, cardIconViewBox } from '../ui/card-icon.js';
 import { myPcIconMarkup, myPcIconRatio, myPcIconViewBox } from '../ui/my-pc-icon.js';
+import { icon } from '../ui/interface-icon.js';
+import { installExtensionEffects } from '../extensions/registry.js';
 
 import { changedFileButton, installConversationDrop } from './conversation-drop.js';
 
@@ -32,6 +42,12 @@ const h = react.createElement;
 const instancePrefix = 'dsh-resource://workspace-explorer/tab/';
 const computerPrefix = instancePrefix + 'computer/';
 const changesReviewPrefix = 'dsh-resource://changes-review/session/';
+
+function browseGroup(tabScope, sessionId, workspace) {
+  if (tabScope === 'global') return 'global';
+  if (tabScope === 'workspace' && workspace) return 'workspace:' + workspace.toLowerCase();
+  return tabScope + ':session:' + sessionId;
+}
 
 /**
  * The guide card's 标志. Guide entries take an icon *component* (`entry.icon` is rendered as
@@ -60,15 +76,35 @@ function CardIcon({ size = 26, className, computer = false }) {
 function apply(ctx) {
   if (location.protocol !== 'dsh-app:' || location.hostname !== 'app') return;
   if (!navigator.platform.startsWith('Win')) return;
+  const preferences = createPreferences();
+  function Settings() { return h(ExplorerPreferences, { preferences }); }
+  function SettingsIcon({ size = 16 }) { return icon('settings-explorer', size); }
+  ctx.effect(() => ctx.slots.inject('settings.section', () => ctx.slots.register({
+    name: 'settings.section', id, label: () => '电脑文件资源管理器', order: 30,
+  }, Settings)));
+  ctx.effect(() => ctx.slots.inject('settings.section.icon', () => ctx.slots.register({
+    name: 'settings.section.icon', id,
+  }, SettingsIcon)));
+
   ctx.inject(['sidebarRightTabs', 'sidebarRight', 'remote', 'remote.session', 'remote.workspaceFiles', 'conversation', 'sessions'], (scope) => {
     const sidebar = scope.sidebarRight;
+    let sidebarWidth;
     const bindings = new Map();
     const folderTabs = new Map();
+    const inactiveGroups = new Map();
     const listeners = new Set();
+    const enlargedPreviews = new Map();
+    const previewParking = document.createElement('div');
+    previewParking.className = 'dwe dwe-preview-parking';
+    const parkSurface = surface => parkPreview(surface.host, previewParking);
+    const previewWindows = createPreviewWindows(sidebar, notify, subscribe, previewParking);
     let viewList = [];
     let activeView;
     let presentedSession;
+    let presentedGroup;
     let workspace;
+    let guidePreviewOpen;
+    let lastPreviewOpen = true;
     let expanded;
     let fileFocused = false;
     let projecting = false;
@@ -83,6 +119,18 @@ function apply(ctx) {
       return session && scope.get('conversation').input.for(session);
     }
 
+    function sendQuote(file, selection) {
+      const sessionId = sidebar.mounted.getSnapshot();
+      return Boolean(sessionId && insertPreviewQuote(getInput(sessionId), file, selection));
+    }
+
+    scope.inject(['uiConversation'], (conversationScope) => {
+      conversationScope.effect(() => conversationScope.uiConversation.userText.register(quoteRule));
+      conversationScope.effect(() => scope.slots.inject('conversation.user.text.node', () => scope.slots.register({
+        name: 'conversation.user.text.node', key: quoteNodeId,
+      }, (props) => h(MessageQuote, { ...props, openFile: openQuotedFile }))));
+    });
+
     function subscribe(listener) {
       listeners.add(listener);
       return () => listeners.delete(listener);
@@ -96,13 +144,54 @@ function apply(ctx) {
       return sidebar.openTabs.getSnapshot().filter(tab => tab.sessionId === sessionId && tab.kind === tabKind);
     }
 
-    function createView(initialPath, initialWorkspaceRoot = null) {
+    function viewPreviewOpen(view) {
+      return view?.saved.state?.previewOpen ?? view?.initialPreviewOpen ?? lastPreviewOpen;
+    }
+
+    function createView(initialPath, initialWorkspaceRoot = null, initialPreviewOpen = viewPreviewOpen(activeView)) {
       const host = document.createElement('div');
       host.className = 'dwe-host';
       const address = (initialPath === null ? computerPrefix : instancePrefix) + crypto.randomUUID();
-      const view = { host, address, path: initialPath ?? null, initialPath,
-        initialWorkspaceRoot, workspaceRoot: initialWorkspaceRoot };
-      view.getTarget = () => view.target;
+      const previewPane = document.createElement('div');
+      previewPane.className = 'dwe-preview-pane-host';
+      const view = { host, address, path: initialPath ?? null, initialPath, initialPreviewOpen,
+        initialWorkspaceRoot, workspaceRoot: initialWorkspaceRoot, saved: {},
+        previewPane, previewSurfaces: new Map(), promotedSurfaces: new Set() };
+      view.bindPreviewSurface = surface => {
+        view.previewSurfaces.set(surface.previewKey, surface);
+        return () => {
+          view.previewSurfaces.delete(surface.previewKey);
+          const entry = [...enlargedPreviews.values()].find(item => item.surface === surface);
+          if (entry) releaseEnlargedPreview(entry);
+          surface.host.remove();
+        };
+      };
+      view.promotePreview = (key, restore, paneId = view.getTarget()?.paneId) => {
+        const surface = view.previewSurfaces.get(key);
+        const sessionId = view.getTarget()?.sessionId;
+        if (!surface || !sessionId || sidebar.mounted.getSnapshot() !== sessionId) return false;
+        const address = previewTabAddress(surface.file, surface.root);
+        if (!address) return false;
+        const entryKey = sessionId + '\n' + address;
+        if (enlargedPreviews.has(entryKey)) {
+          openPreviewTab(surface.file, surface.root, paneId, sessionId);
+          return true;
+        }
+        const entry = { view, surface, sessionId, entryKey, restore };
+        enlargedPreviews.set(entryKey, entry);
+        view.promotedSurfaces = new Set(view.promotedSurfaces).add(key);
+        parkSurface(surface);
+        openPreviewTab(surface.file, surface.root, paneId, sessionId);
+        const tab = sidebar.active();
+        if (tab?.contentId !== address) {
+          releaseEnlargedPreview(entry);
+          return false;
+        }
+        entry.tabId = tab.id;
+        notify();
+        return true;
+      };
+      view.getTarget = () => view.target ?? view.previewWindow?.target;
       view.onPath = (path, root) => {
         if (view.path === path && view.workspaceRoot === root) return;
         view.workspaceRoot = root;
@@ -128,7 +217,7 @@ function apply(ctx) {
     function rememberPresentation() {
       if (projecting || detached || !presentedSession || sidebar.mounted.getSnapshot() !== presentedSession) return;
       const tab = sidebar.active();
-      const view = tab && bindings.get(tab.id);
+      const view = tab && (bindings.get(tab.id) ?? previewWindows.owner(presentedSession, tab.id));
       if (view) activeView = view;
       fileFocused = Boolean(view);
       expanded = sidebar.isExpanded();
@@ -172,13 +261,18 @@ function apply(ctx) {
       }
       for (const tab of tabs) {
         if (bindings.has(tab.tabId)) continue;
-        const view = createView(tab.contentId?.startsWith(computerPrefix) ? null : folderTabs.get(tab.contentId) ?? workspace);
+        const path = tab.contentId?.startsWith(computerPrefix) ? null : folderTabs.get(tab.contentId) ?? workspace;
+        const view = createView(path, null, guidePreviewOpen);
         bindings.set(tab.tabId, view);
         added.push(view);
       }
       if (removed.size || added.length) {
         viewList = [...viewList.filter(view => !removed.has(view)), ...added];
-        if (removed.has(activeView)) activeView = undefined;
+        if (removed.has(activeView)) {
+          lastPreviewOpen = viewPreviewOpen(activeView);
+          activeView = undefined;
+        }
+        for (const view of removed) previewWindows.close(view);
         notify();
       }
       rememberPresentation();
@@ -194,16 +288,22 @@ function apply(ctx) {
         return;
       }
       if (detached) return;
-      rememberOrder(presentedSession);
-      for (const view of viewList) {
-        if (!view.workspaceRoot) continue;
-        const list = view.host.querySelector('.dwe-list');
-        if (list?.getClientRects().length) view.handoffScroll = { path: view.path, top: list.scrollTop, left: list.scrollLeft };
-      }
+      captureDepartingViews();
       detached = true;
+      previewWindows.leave(presentedSession);
       if (expanded && viewList.length) beginHandoff();
       // The old native store is still adopted before React commits the session change.
       for (const tab of filesIn(presentedSession)) sidebar.closeIn?.(presentedSession, tab.tabId);
+    }
+
+    function captureDepartingViews() {
+      rememberOrder(presentedSession);
+      for (const view of viewList) {
+        const list = view.host.querySelector('.dwe-list');
+        if (list?.getClientRects().length && list.querySelector('.dwe-entries')) {
+          view.saved.scroll = { path: view.path, top: list.scrollTop, left: list.scrollLeft };
+        }
+      }
     }
 
     function beginHandoff() {
@@ -262,17 +362,35 @@ function apply(ctx) {
       return view;
     }
 
-    function present(sessionId, cwd) {
-      workspace = windowsPath(cwd) ?? undefined;
-      if (sessionId !== presentedSession || detached) {
-        const first = !presentedSession;
+    function present(sessionId, cwd, tabScope = preferences.get().tabScope) {
+      const nextWorkspace = windowsPath(cwd) ?? undefined;
+      const group = browseGroup(tabScope, sessionId, nextWorkspace);
+      const first = !presentedSession;
+      const groupChanged = !first && group !== presentedGroup;
+      if (groupChanged) {
+        if (!detached) captureDepartingViews();
+        const previous = { viewList, activeView };
+        const saved = inactiveGroups.get(group);
+        const pendingWorkspace = tabScope === 'workspace' && sessionId === presentedSession
+          && presentedGroup === browseGroup(tabScope, sessionId);
+        if (!pendingWorkspace || saved) inactiveGroups.set(presentedGroup, previous);
+        inactiveGroups.delete(group);
+        const target = saved ?? (pendingWorkspace ? previous : undefined);
+        const firstView = !target && tabScope !== 'global' && nextWorkspace && viewList.length
+          ? createView(nextWorkspace, activeView?.workspaceRoot ? nextWorkspace : null) : undefined;
+        viewList = target?.viewList ?? (firstView ? [firstView] : []);
+        activeView = target?.activeView ?? firstView;
+      }
+      presentedGroup = group;
+      workspace = nextWorkspace;
+      if (first || sessionId !== presentedSession || detached || groupChanged) {
         presentedSession = sessionId;
         detached = false;
         bindings.clear();
         if (first) {
           syncTabs();
         } else {
-          activeView = getOrCreateWorkspaceView() ?? activeView;
+          if (tabScope === 'global') activeView = getOrCreateWorkspaceView() ?? activeView;
           const nativeActive = sidebar.active();
           const preserveExpansion = expanded;
           projecting = true;
@@ -284,15 +402,25 @@ function apply(ctx) {
               const restoreTab = !fileFocused && nativeActive?.kind !== tabKind ? nativeActive?.id
                 : [...bindings].find(([, view]) => view === activeView)?.[0];
               if (restoreTab) sidebar.focus(restoreTab);
-              if (preserveExpansion !== undefined && sidebar.isExpanded() !== preserveExpansion) sidebar.toggleExpanded();
             }
+            if ((viewList.length || groupChanged) && preserveExpansion !== undefined
+                && sidebar.isExpanded() !== preserveExpansion) sidebar.toggleExpanded();
           } finally {
             projecting = false;
           }
           notify();
           rememberPresentation();
         }
-      } else {
+        const layout = sidebar.mountedSurface?.()?.layout;
+        if (layout) {
+          for (const [tabId, view] of bindings) {
+            if (!view.previewWindow) continue;
+            const pane = Object.values(layout.nodes).find(node => node.tabs?.includes(tabId));
+            if (pane) view.previewWindow.target = { sessionId, tabId, paneId: pane.id, isFloating: pane.host === 'float' };
+          }
+        }
+        previewWindows.present(sessionId, viewList);
+      } else if (tabScope === 'global') {
         // A newly mounted session's cwd can arrive after its sidebar is available.
         const view = getOrCreateWorkspaceView();
         if (!view || view === activeView) return;
@@ -335,10 +463,29 @@ function apply(ctx) {
     }
 
     function openPreviewTab(file, root, paneId, sessionId) {
-      if (sidebar.mounted.getSnapshot() !== sessionId) return;
+      if (!sessionId || sidebar.mounted.getSnapshot() !== sessionId) return false;
       const address = previewTabAddress(file, root);
-      if (!address) return;
+      if (!address) return false;
       openNextToActive(address, { kind: PREVIEW_KIND, paneId, params: file.line ? { line: file.line } : undefined });
+      return true;
+    }
+
+    function releaseEnlargedPreview(entry) {
+      if (enlargedPreviews.get(entry.entryKey) !== entry) return;
+      enlargedPreviews.delete(entry.entryKey);
+      const { view, surface } = entry;
+      view.promotedSurfaces = new Set(view.promotedSurfaces);
+      view.promotedSurfaces.delete(surface.previewKey);
+      notify();
+    }
+
+    function syncEnlargedPreviews() {
+      const tabs = sidebar.openTabs.getSnapshot();
+      for (const entry of enlargedPreviews.values()) {
+        if (entry.tabId && !tabs.some(tab => tab.sessionId === entry.sessionId && tab.tabId === entry.tabId)) {
+          releaseEnlargedPreview(entry);
+        }
+      }
     }
 
     async function statFile(sessionId, file, signal) {
@@ -362,10 +509,11 @@ function apply(ctx) {
     }
 
     function currentExplorer() {
-      return bindings.get(sidebar.active()?.id) ?? activeView ?? viewList[0];
+      const tabId = sidebar.active()?.id;
+      return bindings.get(tabId) ?? previewWindows.owner(presentedSession, tabId) ?? activeView ?? viewList[0];
     }
 
-    function restoreMusicPreview(file, origin) {
+    function revealInExplorer(file, origin) {
       const sessionId = sidebar.mounted.getSnapshot();
       if (!sessionId) return false;
       const existing = viewList.includes(origin) ? origin : currentExplorer();
@@ -380,8 +528,51 @@ function apply(ctx) {
       return true;
     }
 
+    function showConversationFile(file, sessionId) {
+      if (preferences.get().conversationFileView === 'full') {
+        return openPreviewTab(file, null, undefined, sessionId);
+      }
+      return revealInExplorer(file);
+    }
+
+    async function openQuotedFile(path) {
+      const sessionId = sidebar.mounted.getSnapshot();
+      if (!sessionId) return false;
+      try {
+        const file = await disks.locate(path);
+        return sidebar.mounted.getSnapshot() === sessionId && file.type === 'file' &&
+          showConversationFile({ absolute: file.path, name: file.name, size: file.size }, sessionId);
+      } catch {
+        return false;
+      }
+    }
+
     function MediaFilePreviewTab(props) {
-      return h(FilePreviewTab, { ...props, restoreMusicPreview });
+      const { tab, panel } = props.useTabInfo();
+      react.useLayoutEffect(() => {
+        if (tab.visible && !panel?.isFloating) sidebarWidth?.initialize();
+      }, [tab.visible, panel?.isFloating]);
+      const entry = react.useSyncExternalStore(subscribe,
+        () => enlargedPreviews.get(props.sessionId + '\n' + tab.navigation.address));
+      return h(FilePreviewTab, {
+        ...props, surface: entry?.surface, parkPreview: parkSurface, restoreMusicPreview: revealInExplorer, sendQuote, preferences,
+        onOpenNative: (file, root) => openNativePreview(file, root, { sessionId: props.sessionId, paneId: panel?.id },
+          () => sidebar.mounted.getSnapshot() === props.sessionId && sidebar.openTabs.getSnapshot().some(item =>
+            item.sessionId === props.sessionId && (item.tabId ?? item.id) === tab.id && item.contentId === tab.navigation.address), openDocument),
+        onExit: file => {
+          if (!entry) revealInExplorer(file);
+          else {
+            parkSurface(entry.surface);
+            const origin = filesIn(entry.sessionId).find(item => bindings.get(item.tabId) === entry.view);
+            if (origin) {
+              entry.restore();
+              sidebar.focus(origin.tabId);
+            } else revealInExplorer(file);
+            releaseEnlargedPreview(entry);
+          }
+          tab.actions.close();
+        },
+      });
     }
 
     function isVisibleExplorer(view) {
@@ -398,10 +589,10 @@ function apply(ctx) {
           : [bindings.get(sidebar.active()?.id), activeView, ...visibleViews].find(isVisibleExplorer));
       if (!view) return;
       const { sessionId, paneId } = view.target;
-      return direction => {
+      return action => {
         if (!isVisibleExplorer(view) || view.target.sessionId !== sessionId || view.target.paneId !== paneId) return;
-        if (direction === 'up') view.fileActions.goUp();
-        else view.fileActions.historyStep(direction === 'left' ? -1 : 1);
+        if (action === 'up') view.fileActions.goUp();
+        else view.fileActions.historyStep(action === 'back' ? -1 : 1);
       };
     }
 
@@ -411,7 +602,7 @@ function apply(ctx) {
       if (bounds && bounds.width >= 112 && bounds.height >= 112) return bounds;
     }
 
-    async function openConversationFile(request, signal, { view, onUnavailable }) {
+    async function openConversationFile(request, signal, onUnavailable) {
       const { address, sessionId, file, params } = request;
       const metadata = await statFile(sessionId, file, signal);
       if (signal.aborted || sidebar.mounted.getSnapshot() !== sessionId) return;
@@ -420,14 +611,7 @@ function apply(ctx) {
         else openDocument(address, { params });
         return;
       }
-      const existing = viewList.includes(view) ? view : currentExplorer();
-      const tabId = existing && [...bindings].find(([, item]) => item === existing)?.[0];
-      if (tabId) {
-        sidebar.focus(tabId);
-        if (!sidebar.isExpanded() && !existing.target?.isFloating) sidebar.toggleExpanded();
-      }
-      const target = tabId ? existing : openFolderTab(parentOf(metadata.absolute));
-      if (target) revealFile(target, metadata, params?.line);
+      showConversationFile({ ...metadata, line: params?.line }, sessionId);
     }
 
     function installFileOpener() {
@@ -438,7 +622,7 @@ function apply(ctx) {
       function openFile(request, onUnavailable) {
         fileClick?.abort();
         fileClick = new AbortController();
-        void openConversationFile(request, fileClick.signal, { view: currentExplorer(), onUnavailable });
+        void openConversationFile(request, fileClick.signal, onUnavailable);
       }
       function open(address, options) {
         const changed = dragSource?.changed;
@@ -507,6 +691,22 @@ function apply(ctx) {
       };
     }
 
+    function installAddTabOrigin() {
+      const openTab = sidebar.openTab;
+      if (typeof openTab !== 'function') return () => {};
+      function open(kind, options) {
+        // DockKit opens the plus-button guide in a specific pane with revealIfOpened disabled.
+        if (kind === 'guide' && options?.paneId !== undefined && options.revealIfOpened === false) {
+          options = { ...options, params: { ...options.params, dweAddedFromPlus: true } };
+        }
+        return openTab.call(this, kind, options);
+      }
+      sidebar.openTab = open;
+      return () => {
+        if (sidebar.openTab === open) sidebar.openTab = openTab;
+      };
+    }
+
     function refreshDirectories(paths, moved = []) {
       const changed = new Set(paths.map(path => path.toLowerCase()));
       for (const view of viewList) {
@@ -530,16 +730,18 @@ function apply(ctx) {
       react.useLayoutEffect(() => {
         if (!tab.visible || !view) return;
         const element = anchor.current;
-        const target = { sessionId, paneId: panel.id, isFloating: panel.isFloating };
+        const target = { sessionId, paneId: panel.id, isFloating: panel.isFloating, tabId: tab.id };
+        if (!panel.isFloating) sidebarWidth?.initialize();
         view.target = target;
+        if (view.previewWindow) view.previewWindow.target = target;
         element.appendChild(view.host);
-        const savedScroll = view.handoffScroll;
-        view.handoffScroll = undefined;
-        if (savedScroll?.path === view.path) {
+        const savedScroll = view.saved.scroll;
+        if (savedScroll && savedScroll.path === view.path) {
           const list = view.host.querySelector('.dwe-list');
-          if (list) {
+          if (list?.querySelector('.dwe-entries')) {
             list.scrollTop = savedScroll.top;
             list.scrollLeft = savedScroll.left;
+            delete view.saved.scroll;
           }
         }
         notify();
@@ -585,29 +787,49 @@ function apply(ctx) {
       const { tab } = useTabInfo();
       const path = react.useSyncExternalStore(subscribe, () => boundView(sessionId, tab.id)?.path ?? null);
       const workspaceMode = react.useSyncExternalStore(subscribe, () => Boolean(boundView(sessionId, tab.id)?.workspaceRoot));
+      const autoCollapse = react.useSyncExternalStore(preferences.subscribe, () => preferences.get().workspaceTabsAutoCollapse);
       react.useLayoutEffect(() => {
         if (tab.visible) capturePresentation(sessionId);
       });
-      return h(ExplorerTitle, { path, workspaceMode });
+      return h(ExplorerTitle, { path, workspaceMode, autoCollapse });
     }
 
-    function View({ view, cwd }) {
+    function View({ view, cwd, followWorkspace }) {
       const target = react.useSyncExternalStore(subscribe, view.getTarget);
-      const sessionId = target?.sessionId;
+      const promotedSurfaces = react.useSyncExternalStore(subscribe, () => view.promotedSurfaces);
+      const floatingPreview = react.useSyncExternalStore(subscribe, () => Boolean(view.previewWindow));
+      const sessionId = view.previewWindow?.sessionId ?? target?.sessionId;
+      const favoritesDisplay = react.useSyncExternalStore(preferences.subscribe, () => preferences.get().favoritesDisplay);
+      const workspaceButtonDisplay = react.useSyncExternalStore(preferences.subscribe, () => preferences.get().workspaceButtonDisplay);
       return reactDom.createPortal(h(Explorer, {
-        sessionId, cwd, initialPath: view.initialPath, initialWorkspaceRoot: view.initialWorkspaceRoot,
+        sessionId, cwd, followWorkspace, saved: view.saved,
+        initialPath: view.initialPath, initialWorkspaceRoot: view.initialWorkspaceRoot, initialPreviewOpen: view.initialPreviewOpen,
+        favoritesDisplay, workspaceButtonDisplay, preferences,
         getTarget: view.getTarget, bindFileActions: view.bindFileActions,
-        onPath: view.onPath, openLocal, openDocument, openFolderTab, openPreviewTab, refreshDirectories, updateRenamedPath, getInput,
-        restoreMusicPreview: file => restoreMusicPreview(file, view),
+        onPath: view.onPath, openLocal, openDocument, openFolderTab, openPreviewTab, refreshDirectories, updateRenamedPath, getInput, sendQuote,
+        restoreMusicPreview: file => revealInExplorer(file, view),
+        promotedSurfaces, bindPreviewSurface: view.bindPreviewSurface, promotePreview: view.promotePreview,
+        previewPane: view.previewPane, floatingPreview,
+        detachPreview: point => previewWindows.open(view, point),
+        closeFloatingPreview: () => previewWindows.close(view),
       }), view.host);
     }
 
     function ExplorerGuide({ kind, title, description, useTabInfo }) {
       const { tab, panel } = useTabInfo();
+      function openFromGuide(open) {
+        if (tab.navigation?.params?.dweAddedFromPlus) guidePreviewOpen = preferences.get().newTabPreviewOpen;
+        try {
+          open();
+          syncTabs();
+        } finally {
+          guidePreviewOpen = undefined;
+        }
+      }
       return h('div', { className: 'dwe-guide-entry', 'data-sidebar-right-guide-entry': kind },
         h('button', { type: 'button', className: 'dwe-guide-main',
           onClick: () => {
-            tab.actions.openTab(tabKind, { replaceTab: true });
+            openFromGuide(() => tab.actions.openTab(tabKind, { replaceTab: true }));
             tab.actions.close();
           },
         },
@@ -617,21 +839,28 @@ function apply(ctx) {
           description !== undefined && h('span', { className: 'dwe-guide-description' }, description))),
         h('button', { type: 'button', className: 'dwe-guide-computer', title: '打开此电脑',
           'aria-label': '打开此电脑',
-          onClick: () => sidebar.openResource(computerPrefix + crypto.randomUUID(), {
+          onClick: () => openFromGuide(() => sidebar.openResource(computerPrefix + crypto.randomUUID(), {
             kind: tabKind, paneId: panel.id, replaceTab: tab.id,
-          }),
+          })),
         }, h(CardIcon, { computer: true })));
     }
 
     function Keeper({ useSessions }) {
       const sessionId = react.useSyncExternalStore(sidebar.mounted.subscribe, sidebar.mounted.getSnapshot);
       const currentViews = react.useSyncExternalStore(subscribe, () => viewList);
+      const currentGroup = react.useSyncExternalStore(subscribe, () => presentedGroup);
+      const currentWorkspace = react.useSyncExternalStore(subscribe, () => workspace);
       const cwd = useSessions(state => sessionId ? state.byId[sessionId]?.cwd : undefined);
+      const tabScope = react.useSyncExternalStore(preferences.subscribe, () => preferences.get().tabScope);
+      const followsWorkspace = currentGroup !== undefined && currentGroup !== 'global';
+      // A departing group must finish with its own workspace before the incoming views mount.
+      const viewCwd = sessionId === presentedSession && browseGroup(tabScope, sessionId, windowsPath(cwd)) === currentGroup
+        ? cwd : currentWorkspace;
       react.useLayoutEffect(() => {
-        if (sessionId && sidebar.mounted.getSnapshot() === sessionId) present(sessionId, cwd);
-      }, [sessionId, cwd]);
+        if (sessionId && sidebar.mounted.getSnapshot() === sessionId) present(sessionId, cwd, tabScope);
+      }, [sessionId, cwd, tabScope]);
       return h(react.Fragment, null, h(MusicCapsule, { sessionId }),
-        currentViews.map(view => h(View, { key: view.address, view, cwd })));
+        currentViews.map(view => h(View, { key: view.address, view, cwd: viewCwd, followWorkspace: followsWorkspace })));
     }
 
     scope.effect(() => {
@@ -639,9 +868,10 @@ function apply(ctx) {
       style.dataset.dshWorkspaceExplorer = '';
       style.textContent = explorerCss;
       document.head.appendChild(style);
+      document.body.appendChild(previewParking);
       function wheel(event) {
         if (!(event.target instanceof Element)) return;
-        const scroller = event.target.closest('.dwe-path, .dwe-preview-tabs');
+        const scroller = event.target.closest('.dwe-path, .dwe-preview-tabs, .dwe-toolbar, [data-dwe-extension-area="file-footer"]');
         if (scroller) scrollHorizontally(event, scroller);
         else {
           const strip = event.target.closest('[data-dockkit-strip-tabs]');
@@ -650,26 +880,51 @@ function apply(ctx) {
       }
       document.addEventListener('wheel', wheel, { passive: false, capture: true });
       const disposeFileOpener = installFileOpener();
+      const disposeAddTabOrigin = installAddTabOrigin();
       const disposeConversationPathDrop = installConversationPathDrop(sidebar.mounted, getInput);
-      const disposeMouseGestures = installMouseGestures(gestureAction, gestureBadgeBounds);
+      let disposeMouseGestures;
+      function syncGestures() {
+        if (preferences.get().gesturesEnabled) {
+          disposeMouseGestures ??= installMouseGestures(gestureAction, gestureBadgeBounds,
+            direction => preferences.get().gestures[direction]);
+        } else {
+          disposeMouseGestures?.();
+          disposeMouseGestures = undefined;
+        }
+      }
+      syncGestures();
+      const disposePreferences = preferences.subscribe(syncGestures);
+      window.addEventListener('storage', preferences.onStorage);
       const disposeMotion = installSidebarMotion(sidebar);
       const disposeSidebarClose = installSidebarClose(sidebar, () => projecting || detached);
       const disposeSidebarFade = installSidebarFade(sidebar);
-      const disposeSidebarTabInteractions = installSidebarTabInteractions(sidebar.mounted);
-      const disposeSidebarHeaderControls = installSidebarHeaderControls(sidebar);
+      const disposeSidebarTabInteractions = installSidebarTabInteractions(sidebar.mounted, preferences);
+      const disposeSidebarHeaderControls = installSidebarHeaderControls(sidebar, preferences);
+      const disposeExtensions = installExtensionEffects(preferences);
       const disposeTabs = sidebar.openTabs.subscribe(syncTabs);
+      const disposePreviewTabs = sidebar.openTabs.subscribe(syncEnlargedPreviews);
+      const disposePreviewWindows = sidebar.openTabs.subscribe(previewWindows.sync);
       const disposeSwitch = sidebar.mounted.subscribe(closeDepartingTabs);
       return () => {
         stopMusic();
         disposeFileOpener();
+        disposeAddTabOrigin();
         disposeConversationPathDrop();
-        disposeMouseGestures();
+        disposePreferences();
+        disposeMouseGestures?.();
+        window.removeEventListener('storage', preferences.onStorage);
         disposeMotion();
         disposeSidebarClose();
         disposeSidebarFade();
         disposeSidebarTabInteractions();
         disposeSidebarHeaderControls();
+        disposeExtensions();
         disposeTabs();
+        disposePreviewTabs();
+        disposePreviewWindows();
+        previewWindows.dispose();
+        enlargedPreviews.clear();
+        previewParking.remove();
         disposeSwitch();
         detached = false;
         finishHandoff();
@@ -677,12 +932,25 @@ function apply(ctx) {
         style.remove();
       };
     });
+    scope.inject(['layout'], layoutScope => {
+      layoutScope.effect(() => {
+        const width = installSidebarWidth(layoutScope.layout, document);
+        sidebarWidth = width;
+        if (activeView?.target && !activeView.target.isFloating) width.initialize();
+        return () => {
+          sidebarWidth = undefined;
+          width.dispose();
+        };
+      });
+    });
     for (const [name, key, component] of [
       ['shell.overlay', undefined, Keeper],
       ['sidebar.right.pane.tab', id, Anchor],
       ['sidebar.right.pane.tab.title', id, Title],
       ['sidebar.right.pane.tab', PREVIEW_KIND, MediaFilePreviewTab],
       ['sidebar.right.pane.tab.title', PREVIEW_KIND, FilePreviewTitle],
+      ['sidebar.right.pane.tab', PREVIEW_WINDOW_KIND, previewWindows.Anchor],
+      ['sidebar.right.pane.tab.title', PREVIEW_WINDOW_KIND, PreviewWindowTitle],
       ['sidebar.right.tab.guide.entry', id, ExplorerGuide],
     ]) {
       scope.effect(() => scope.slots.inject(name, () =>
@@ -695,6 +963,9 @@ function apply(ctx) {
     // installFileOpener(), which patches the host's openResource whatever kind is in front.
     scope.effect(() => scope.sidebarRightTabs.register({
       id: PREVIEW_KIND, kind: PREVIEW_KIND, priority: 'extension', title: previewTabLabel,
+    }));
+    scope.effect(() => scope.sidebarRightTabs.register({
+      id: PREVIEW_WINDOW_KIND, kind: PREVIEW_WINDOW_KIND, priority: 'extension', title: () => '预览',
     }));
     scope.effect(() => {
       // The tab strip and the guide row both read 电脑文件资源管理器.

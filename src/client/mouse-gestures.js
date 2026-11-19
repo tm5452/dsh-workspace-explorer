@@ -1,4 +1,5 @@
 import { mountIcon } from '../ui/interface-icon.js';
+import { gestureActions } from './preferences.js';
 
 const dragDistance = 6;
 const sampleDistance = 2;
@@ -9,8 +10,6 @@ const menuDelay = 650;
 const feedbackDelay = 450;
 const recognitionDelay = 34;
 const trackingAttribute = 'data-dwe-mouse-gesture-tracking';
-const labels = { left: '后退', right: '前进', up: '返回上一级', invalid: '无效手势' };
-const actionIcons = { left: 'back', right: 'forward', up: 'up', invalid: 'gesture-invalid' };
 
 function recordPoint(gesture, { clientX: x, clientY: y, timeStamp }) {
   // Pointer and compatibility mouse events may report the same samples.
@@ -44,7 +43,7 @@ function directionOf(gesture) {
   }
   // The diagonals are the 45° boundaries between the four directions.
   if (Math.abs(x) >= Math.abs(y)) return x < 0 ? 'left' : 'right';
-  return y < 0 ? 'up' : 'invalid';
+  return y < 0 ? 'up' : 'down';
 }
 
 function createFeedback(getBadgeBounds) {
@@ -108,14 +107,14 @@ function createFeedback(getBadgeBounds) {
     overlay.style.setProperty('--dwe-gesture-badge-x', bounds.left + bounds.width / 2 + 'px');
     overlay.style.setProperty('--dwe-gesture-badge-y', bounds.top + bounds.height / 2 + 'px');
     overlay.dataset.action = action;
-    mountIcon(icon, actionIcons[action]);
-    label.textContent = labels[action];
+    mountIcon(icon, action === 'invalid' ? 'gesture-invalid' : action);
+    label.textContent = action === 'invalid' ? '无效手势' : gestureActions[action];
   }
 
   return { draw, finish, showAction, hide };
 }
 
-export function installMouseGestures(resolveAction, getBadgeBounds) {
+export function installMouseGestures(resolveAction, getBadgeBounds, getAction) {
   const lifetime = new AbortController();
   const options = { capture: true, signal: lifetime.signal };
   const feedback = createFeedback(getBadgeBounds);
@@ -190,9 +189,11 @@ export function installMouseGestures(resolveAction, getBadgeBounds) {
     feedback.finish(finished);
     setTimeout(() => {
       if (lifetime.signal.aborted) return;
-      const action = finished.cancelled ? 'invalid' : directionOf(finished);
-      feedback.showAction(finished, finished.perform ? action : 'invalid');
-      if (action !== 'invalid') finished.perform?.(action);
+      const direction = finished.cancelled ? 'invalid' : directionOf(finished);
+      const action = finished.perform && getAction(direction);
+      const mapped = action && action !== 'none' ? action : 'invalid';
+      feedback.showAction(finished, mapped);
+      if (mapped !== 'invalid') finished.perform(mapped);
     }, recognitionDelay);
   }
 

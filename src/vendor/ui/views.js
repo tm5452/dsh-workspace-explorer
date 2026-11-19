@@ -1655,6 +1655,8 @@ export function ArchivePreviewBody(props) {
   const [selected, setSelected] = react.useState(null);
   const [expanded, setExpanded] = react.useState(() => new Set());
   const [detail, setDetail] = react.useState({ status: 'idle' });
+  const [detailOpen, setDetailOpen] = react.useState(() => props.detailInitiallyOpen ?? true);
+  const detailId = react.useId();
   const [detailScrollRef, attachDetailScroll] = useScrollport(props);
 
   // 列举归档（异步 + 竞态取消）。
@@ -1726,7 +1728,7 @@ export function ArchivePreviewBody(props) {
 
   // 读取单个条目（文本 / 图片 / 二进制 / 加密错误），卸载与切换时取消并 revoke Blob URL。
   react.useEffect(() => {
-    if (!selected || !data) return undefined;
+    if (!detailOpen || !selected || !data) return undefined;
     let cancelled = false;
     let objectUrl = null;
     setDetail({ status: 'loading', entry: selected });
@@ -1833,7 +1835,7 @@ export function ArchivePreviewBody(props) {
         }
       }
     };
-  }, [selected, data]);
+  }, [detailOpen, selected, data]);
 
   // 切换条目时把内容区滚回顶部。
   react.useEffect(() => {
@@ -2006,7 +2008,22 @@ export function ArchivePreviewBody(props) {
   return h('div', { className: 'dshpx-root', 'data-dshpx-body': 'archive' },
     toolbar,
     notices.length ? h(Notice, { tone: 'warning', items: notices }) : null,
-    h('div', { className: 'dshpx-split' }, list, h('div', { className: 'dshpx-detail' }, detailHeader, detailBody)));
+    h('div', { className: 'dshpx-split', 'data-dwe-archive-collapsed': !detailOpen || undefined },
+      list,
+      h('div', { className: 'dshpx-detail' },
+        h('div', { className: 'dwe-archive-detail-bar' },
+          detailOpen && detailHeader,
+          h('button', {
+            type: 'button', className: 'dwe-tool dwe-archive-toggle',
+            'aria-label': detailOpen ? '关闭内容预览' : '打开内容预览',
+            title: detailOpen ? '关闭内容预览' : '打开内容预览',
+            'aria-expanded': detailOpen, 'aria-controls': detailId,
+            onClick: () => {
+              if (detailOpen) setDetail({ status: 'idle' });
+              setDetailOpen(!detailOpen);
+            },
+          }, props.detailToggleIcon)),
+        h('div', { id: detailId, className: 'dwe-archive-detail-content', hidden: !detailOpen }, detailOpen && detailBody))));
 }
 
 // ---------------------------------------------------------------------------

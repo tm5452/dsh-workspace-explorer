@@ -2,6 +2,7 @@ import { disks } from './workspace.js';
 import { makeThumbnail } from './thumbnail.js';
 import { useMediaViewport } from './preview-zoom.js';
 import { MediaProgress, mediaButton, mediaIcon } from './media-controls.js';
+import { icon } from './interface-icon.js';
 import { formatSize } from './file-size.js';
 import { bufferMediaSource, mediaCanSeek, openMediaSource, releaseMediaSource } from './media-source.js';
 
@@ -69,6 +70,8 @@ export function VideoPreview({ file, root, mime, confirmed, openImmediately, onC
   const viewport = useRef(null);
   const overlay = useRef(null);
   const player = useRef(null);
+  const card = useRef(null);
+  const details = useRef(null);
   const restorePlayback = useRef(null);
   const infoId = useId();
   const [started, setStarted] = useState(Boolean(confirmed));
@@ -77,10 +80,26 @@ export function VideoPreview({ file, root, mime, confirmed, openImmediately, onC
   const [useBuffer, setUseBuffer] = useState(false);
   const [size, setSize] = useState(file.size);
   const [fullscreen, setFullscreen] = useState(false);
+  const [smallCard, setSmallCard] = useState(false);
   const [playback, setPlayback] = useState({ current: 0, duration: 0, playing: false, ended: false });
   const [failed, setFailed] = useState(false);
   const [ready, setReady] = useState(false);
+  const compact = smallCard && !fullscreen;
   useMediaViewport(viewport, fullscreen);
+
+  useLayoutEffect(() => {
+    if (fullscreen) return;
+    const surface = card.current;
+    const text = details.current;
+    function fit() {
+      setSmallCard(surface.clientHeight > 0 && text.offsetHeight * 2 > surface.clientHeight);
+    }
+    const observer = new ResizeObserver(fit);
+    observer.observe(surface);
+    observer.observe(text);
+    fit();
+    return () => observer.disconnect();
+  }, [fullscreen]);
 
   useLayoutEffect(() => {
     if (!fullscreen) return;
@@ -99,7 +118,7 @@ export function VideoPreview({ file, root, mime, confirmed, openImmediately, onC
   useEffect(() => {
     const controller = new AbortController();
     const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(6000)]);
-    if (!started || !openImmediately) {
+    if (!openImmediately) {
       void makeThumbnail(file.absolute, mime, signal, root, true).then(image => {
         if (!signal.aborted) setPoster(image);
       }, () => {});
@@ -110,7 +129,11 @@ export function VideoPreview({ file, root, mime, confirmed, openImmediately, onC
       }, () => {});
     }
     return () => controller.abort();
-  }, [file.absolute, file.size, root, mime, openImmediately]);
+  }, [file.absolute, file.size, root, mime]);
+
+  useEffect(() => {
+    if (openImmediately) setStarted(true);
+  }, [openImmediately]);
 
   useEffect(() => {
     if (!started) return;
@@ -213,12 +236,16 @@ export function VideoPreview({ file, root, mime, confirmed, openImmediately, onC
     playback.playing ? '暂停' : playback.ended ? '重新播放' : '播放', event => {
       if (!fullscreen || event.detail === 0) play();
     }, 'dwe-video-toggle');
-  const progress = ready && h(MediaProgress, { ...playback, seek });
+  const progress = ready && h(MediaProgress, { ...playback, seek, inactive: compact });
+  const fullscreenButton = !fullscreen && h('button', {
+    type: 'button', className: 'dwe-tool dwe-preview-media-action dwe-video-fullscreen',
+    'aria-label': '视频全屏', title: '视频全屏', onClick: toggleFullscreen,
+  }, icon('video-fullscreen'));
 
-  return h('div', {
+  const view = h('div', {
     ref: overlay, popover: 'manual', className: 'dwe-video-overlay',
   }, h('div', { ref: viewport, className: 'dwe-media-viewport', 'aria-label': '视频预览' },
-    h('div', { className: 'dwe-video-card', 'data-dwe-zoom-surface': '',
+    h('div', { ref: card, className: 'dwe-video-card', 'data-dwe-zoom-surface': '', 'data-compact': compact || undefined,
         'data-cover': !ready || undefined, 'data-paused': !playback.playing || undefined,
         'data-ended': playback.ended || undefined },
       poster && h('img', { className: 'dwe-video-frame', src: poster, alt: '', draggable: false }),
@@ -231,12 +258,11 @@ export function VideoPreview({ file, root, mime, confirmed, openImmediately, onC
       }),
       h('div', { className: 'dwe-video-shade' }),
       h('header', { className: 'dwe-video-head' },
-        h('div', { className: 'dwe-video-details' },
+        h('div', { ref: details, className: 'dwe-video-details' },
           h('div', { className: 'dwe-video-name', title: file.name }, file.name),
           h('div', { className: 'dwe-video-size' }, h('span', null, formatSize(size)),
-            h('button', { type: 'button', className: 'dwe-video-info', 'aria-label': '视频信息',
+            h('button', { type: 'button', className: 'dwe-video-info', 'aria-label': '视频信息', disabled: compact,
               'aria-describedby': infoId }, mediaIcon('info', 10)))),
-        !fullscreen && mediaButton('fullscreen', '全屏', toggleFullscreen, 'dwe-video-fullscreen'),
         h('div', { className: 'dwe-video-tooltip', role: 'tooltip', id: infoId },
           h('span', { className: 'dwe-video-meta-file' }, file.name),
           h('span', null, '视频 · ' + formatSize(size) + ' · ' + mime),
@@ -250,4 +276,5 @@ export function VideoPreview({ file, root, mime, confirmed, openImmediately, onC
     fullscreen && h(FullscreenVideoDock, {
       playButton, progress, ended: playback.ended, activatePlayback: play, exit: toggleFullscreen,
     })));
+  return h(react.Fragment, null, view, fullscreenButton);
 }

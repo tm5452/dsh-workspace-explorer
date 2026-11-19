@@ -4,6 +4,7 @@ const fileSelection = paths => paths.length === 1 ? paths[0] : paths;
 async function request(operation, path, signal, workspace, fields) {
   const response = await fetch(endpoint, {
     method: 'POST', signal, cache: 'no-store',
+    keepalive: operation === 'release-preview',
     headers: { 'content-type': 'application/json', 'x-dsh-workspace-explorer': '1' },
     body: JSON.stringify({ operation, path, workspace: workspace ?? undefined, ...fields }),
   });
@@ -11,7 +12,7 @@ async function request(operation, path, signal, workspace, fields) {
     const body = await response.json().catch(() => null);
     throw new Error(body?.error || '本机文件服务不可用（' + response.status + '）');
   }
-  return operation === 'bytes' || operation === 'office'
+  return operation === 'bytes'
     ? new Uint8Array(await response.arrayBuffer()) : response.json();
 }
 
@@ -23,6 +24,7 @@ export const disks = {
   readTextWindow: (path, signal, root, cursor, line) => request('text-window', path, signal, root, { cursor, line }),
   readBytes: (path, signal, root) => request('bytes', path, signal, root),
   documentPreview: (path, signal, root) => request('document-preview', path, signal, root),
+  officePreview: (path, signal, root) => request('office-preview', path, signal, root),
   imagePreview: (path, signal, root) => request('image-preview', path, signal, root),
   releasePreview: ticket => request('release-preview', ticket).catch(() => {}),
   thumbnail: (path, signal, root) => request('thumbnail', path, signal, root),

@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Office 预览</title>
+  <style>
+    html, body, #office-view { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+    html { background-color: #fff; --dwe-tool-background: #fff; --dwe-tool-hover: #e1e3e8; --dwe-tool-active: #f1f3f5; }
+    html[data-theme="dark"] {
+      background-color: #151517; color-scheme: dark;
+      --dwe-tool-background: #151517; --dwe-tool-hover: #30333a; --dwe-tool-active: #26282e;
+    }
+    #office-view .de-scroll::before { content: ""; display: block; height: var(--dwe-office-inset, 0px); }
+    html[data-dwe-underlay] :is(.de-scroll, .de-grid)::-webkit-scrollbar { width: 9px; height: 9px; }
+    html[data-dwe-underlay] .de-scroll::-webkit-scrollbar-track:vertical,
+    html[data-dwe-underlay] .de-grid::-webkit-scrollbar-track:vertical {
+      background: transparent;
+      margin-top: var(--dwe-scrollbar-inset, var(--dwe-office-inset));
+    }
+    html[data-dwe-underlay] :is(.de-scroll, .de-grid)::-webkit-scrollbar-thumb {
+      background: color-mix(in srgb, var(--de-muted) 50%, transparent);
+      border: 2px solid transparent; background-clip: padding-box; border-radius: 9px;
+    }
+    #office-view .de-outline-toggle {
+      top: calc(var(--dwe-office-outline-top, 10px) + var(--dwe-office-inset, 0px));
+      left: auto; right: 20px; width: 28px; height: 28px;
+      border-radius: 8px;
+      background: color-mix(in srgb, var(--dwe-tool-state-background, var(--dwe-tool-background)) 20%, transparent);
+      backdrop-filter: blur(3px);
+    }
+    #office-view .de-outline-toggle[aria-pressed="true"] { --dwe-tool-state-background: var(--dwe-tool-active); }
+    #office-view .de-outline { top: calc(12px + var(--dwe-office-inset, 0px)); max-height: calc(100% - 24px - var(--dwe-office-inset, 0px)); }
+    #office-view .de-find { margin-top: var(--dwe-office-inset, 0px); }
+    #office-view .de-outline-toggle:is(:hover, :active) {
+      --dwe-tool-state-background: var(--dwe-tool-hover);
+    }
+    #office-view .de-scroll[tabindex="-1"]:focus { outline: none; }
+    #office-view .de-xlsx { zoom: var(--dwe-sheet-zoom, 1); }
+    html[data-dwe-underlay] .de-xlsx .de-fx {
+      position: absolute; z-index: 3; inset: var(--dwe-sheet-inset) 9px auto 0;
+    }
+    html[data-dwe-underlay] .de-grid { --dwe-scrollbar-inset: var(--dwe-sheet-top); }
+    html[data-dwe-underlay] [data-dwe-sheet-region] { isolation: isolate; }
+    html[data-dwe-underlay] :is([data-dwe-sheet-region="top"], [data-dwe-sheet-region="tl"]) { background: var(--de-page); }
+    #office-view :is(.de-fx-val, [data-dwe-sheet-text]) { user-select: text; cursor: text; }
+  </style>
+  <script defer src="?file=engine&amp;v=0.14.2-dwe.3"></script>
+  <script defer src="?file=client"></script>
+</head>
+<body><main id="office-view" aria-label="Office 预览"></main></body>
+</html>

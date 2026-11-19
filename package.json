@@ -1,6 +1,6 @@
 {
   "name": "dsh-workspace-explorer",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "license": "MIT",
   "description": "Windows disk browsing, file operations and persistent preview in DeepSeek Harness Desktop.",
   "type": "module",
@@ -22,12 +22,14 @@
         "@deepseek-ai/dsh-api-workspace-files",
         "@deepseek-ai/dsh-client-ui-sidebar-right",
         "@deepseek-ai/dsh-client-ui-session",
-        "@deepseek-ai/dsh-client-ui-conversation"
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-ui-settings"
       ]
     }
   },
   "scripts": {
-    "build": "node scripts/build-client.mjs"
+    "build": "node scripts/build-client.mjs",
+    "test": "node --test"
   },
   "dependencies": {
     "pdfjs-dist": "5.6.205"
@@ -39,6 +41,7 @@
     "scripts",
     "assets",
     "README.md",
+    "CONTRIBUTING.md",
     "CHANGELOG.md",
     "docs",
     "LICENSE-preview-extra"

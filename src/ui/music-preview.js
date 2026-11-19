@@ -89,10 +89,10 @@ function playButton(track, playing, capsule = false) {
     () => toggleMusic(track), 'dwe-music-play', !track?.url || track.failed);
 }
 
-function MusicAction({ name, label, onClick, disabled, inBody }) {
+function MusicAction({ name, label, onClick, disabled }) {
   return h('button', {
-    type: 'button', className: 'dwe-tool dwe-music-action dwe-music-' + name,
-    'data-dwe-in-preview': inBody || undefined,
+    type: 'button', className: 'dwe-tool dwe-music-action dwe-music-' + name +
+      (name === 'minimize' ? ' dwe-preview-media-action' : ''),
     title: label, 'aria-label': label, disabled, onClick,
   }, icon('music-' + name));
 }
@@ -141,7 +141,7 @@ function MusicCard({ track, file, active, playing }) {
     track?.failed && h('span', { className: 'dwe-music-error', role: 'status' }, '无法预览此音频'));
 }
 
-export function MusicPreview({ file, root, mime, onMinimize, onRestore, minimizeHost }) {
+export function MusicPreview({ file, root, mime, onMinimize, onRestore }) {
   const [loaded, setLoaded] = useState(null);
   const state = useSyncExternalStore(subscribeMusic, musicSnapshot);
   const key = trackKey(file);
@@ -165,50 +165,117 @@ export function MusicPreview({ file, root, mime, onMinimize, onRestore, minimize
 
   if (playback?.capsule) return h('p', { className: 'dwe-preview-hint' }, '单击一个文件进行预览');
   const minimize = onRestore && h(MusicAction, {
-    name: 'minimize', label: '缩小为音乐胶囊', inBody: !minimizeHost,
+    name: 'minimize', label: '缩小为音乐胶囊',
     disabled: !track?.url || track.failed,
     onClick: () => { if (minimizeMusic(track, onRestore)) onMinimize?.(); },
   });
-  return h('div', { className: 'dwe-music-viewport' },
-    minimizeHost && minimize ? reactDom.createPortal(minimize, minimizeHost) : minimize,
-    h(MusicCard, { track, file, active: Boolean(playback), playing: playback?.playing }));
+  return h(react.Fragment, null,
+    h('div', { className: 'dwe-music-viewport' },
+      h(MusicCard, { track, file, active: Boolean(playback), playing: playback?.playing })),
+    minimize);
 }
 
 function FloatingMusic({ state, sessionId }) {
   const capsuleRef = useRef(null);
+  const placement = useRef(null);
   useLayoutEffect(() => {
     const host = capsuleRef.current;
-    const sidebar = document.querySelector('[data-rightbar-col]');
-    const conversation = sidebar?.previousElementSibling;
-    if (!conversation) return;
+    const capsule = host.firstElementChild;
+    const conversation = document.querySelector('[data-rightbar-col]')?.previousElementSibling;
+    const controller = new AbortController();
+    const { signal } = controller;
     let previous;
     let frame;
+    let pointer;
+    let maxX;
+    let maxY;
+
+    function measureBounds() {
+      maxX = Math.max(0, document.documentElement.clientWidth - host.offsetWidth);
+      maxY = Math.max(0, document.documentElement.clientHeight - host.offsetHeight);
+    }
+
+    function place(x, y) {
+      const left = Math.max(0, Math.min(x, maxX));
+      const top = Math.max(0, Math.min(y, maxY));
+      if (placement.current?.x === left && placement.current.y === top) return;
+      placement.current = { x: left, y: top };
+      host.setAttribute('data-dwe-positioned', '');
+      host.style.setProperty('--dwe-capsule-x', left + 'px');
+      host.style.setProperty('--dwe-capsule-y', top + 'px');
+    }
+
     function position() {
       frame = undefined;
-      const rect = conversation.getBoundingClientRect();
-      const canFit = rect.width >= 232 && rect.height >= 175;
-      const header = canFit ? conversation.querySelector('header:has([data-conversation-header-leading])') : null;
-      const right = Math.round(Math.max(16, innerWidth - rect.right + 16));
-      const top = Math.round(Math.max(16, (header?.getBoundingClientRect().bottom ?? rect.top) + 12));
-      const width = Math.round(rect.width - 32);
-      const current = canFit ? right + '/' + top + '/' + width : '';
-      if (current === previous) return;
-      previous = current;
-      host.toggleAttribute('data-dwe-in-conversation', canFit);
-      if (!canFit) return;
-      host.style.setProperty('--dwe-capsule-right', right + 'px');
-      host.style.setProperty('--dwe-capsule-top', top + 'px');
-      host.style.setProperty('--dwe-capsule-width', width + 'px');
+      if (conversation) {
+        const rect = conversation.getBoundingClientRect();
+        const canFit = rect.width >= 232 && rect.height >= 175;
+        const header = canFit ? conversation.querySelector('header:has([data-conversation-header-leading])') : null;
+        const right = Math.round(Math.max(16, innerWidth - rect.right + 16));
+        const top = Math.round(Math.max(16, (header?.getBoundingClientRect().bottom ?? rect.top) + 12));
+        const width = Math.round(rect.width - 32);
+        const current = canFit ? right + '/' + top + '/' + width : '';
+        if (current !== previous) {
+          previous = current;
+          host.toggleAttribute('data-dwe-in-conversation', canFit);
+          if (canFit) {
+            host.style.setProperty('--dwe-capsule-right', right + 'px');
+            host.style.setProperty('--dwe-capsule-top', top + 'px');
+            host.style.setProperty('--dwe-capsule-width', width + 'px');
+          }
+        }
+      }
+      measureBounds();
+      if (placement.current) place(placement.current.x, placement.current.y);
     }
+
+    function start(event) {
+      if (event.button !== 0 || pointer || event.target.closest('input, .dwe-music-restore')) return;
+      measureBounds();
+      const { left, top } = host.getBoundingClientRect();
+      pointer = { id: event.pointerId, left, top, x: event.clientX, y: event.clientY, dragging: false };
+    }
+
+    function move(event) {
+      if (pointer?.id !== event.pointerId) return;
+      if (!(event.buttons & 1)) { end(event); return; }
+      const dx = event.clientX - pointer.x;
+      const dy = event.clientY - pointer.y;
+      if (!pointer.dragging) {
+        if (Math.hypot(dx, dy) < 6) return;
+        pointer.dragging = true;
+        capsule.setAttribute('data-dwe-dragging', '');
+        capsule.setPointerCapture(event.pointerId);
+      }
+      if (event.cancelable) event.preventDefault();
+      place(pointer.left + dx, pointer.top + dy);
+    }
+
+    function end(event) {
+      if (!pointer || (event?.pointerId !== undefined && pointer.id !== event.pointerId)) return;
+      const { id } = pointer;
+      pointer = undefined;
+      capsule.removeAttribute('data-dwe-dragging');
+      if (capsule.hasPointerCapture(id)) capsule.releasePointerCapture(id);
+    }
+
     function schedulePosition() { frame ??= requestAnimationFrame(position); }
     const observer = new ResizeObserver(schedulePosition);
-    observer.observe(conversation);
-    window.addEventListener('resize', schedulePosition);
+    if (conversation) observer.observe(conversation);
+    else host.removeAttribute('data-dwe-in-conversation');
+    window.addEventListener('resize', schedulePosition, { signal });
+    capsule.addEventListener('pointerdown', start, { signal });
+    capsule.addEventListener('lostpointercapture', end, { signal });
+    window.addEventListener('pointermove', move, { signal });
+    window.addEventListener('pointerup', end, { signal });
+    window.addEventListener('pointercancel', end, { signal });
+    window.addEventListener('blur', end, { signal });
     position();
     return () => {
       observer.disconnect();
       if (frame !== undefined) cancelAnimationFrame(frame);
-      window.removeEventListener('resize', schedulePosition);
+      end();
+      controller.abort();
     };
   }, [sessionId]);
 

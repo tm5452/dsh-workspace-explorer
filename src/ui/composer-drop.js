@@ -322,8 +322,8 @@ export function useComposerDrop(sessionId, openFolderTab, openPreviewTab, report
 
   return {
     startDrag: (event, items, tab = {}) => startTransfer(event, dragType, { items, ...tab }),
-    startPreviewDrag: (source, file) => beginPreviewTabDrag(source, sessionId,
-      paneId => openPreviewTab(file, root, paneId, sessionId),
+    startPreviewDrag: (source, file, promote) => beginPreviewTabDrag(source, sessionId,
+      paneId => promote?.(paneId) || openPreviewTab(file, root, paneId, sessionId),
       () => sendToComposer.current?.([{ path: file.absolute, name: file.name }], 'reference')),
     send: (items, mode) => sendToComposer.current?.(items, mode),
   };

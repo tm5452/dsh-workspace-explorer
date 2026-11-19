@@ -1,3 +1,6 @@
+import { extensionAreas } from '../extensions/registry.js';
+import { ExtensionButtons } from '../ui/extension-controls.js';
+
 const panelSelector = '[data-sidebar-right-panel]';
 const cornerSelector = '[data-conversation-header-corner]';
 const stripSelector = '[data-dockkit-strip]';
@@ -40,7 +43,7 @@ function hasSplitRoom({ strip, pane, split, chrome }) {
   return paneWidth / 2 - Math.max(0, paneWidth - stripWidth) >= fixed + (minTab || 100);
 }
 
-export function installSidebarHeaderControls(sidebar) {
+export function installSidebarHeaderControls(sidebar, preferences) {
   const group = document.createElement('div');
   group.className = 'dwe-sidebar-header-controls';
   let sources = [];
@@ -65,6 +68,15 @@ export function installSidebarHeaderControls(sidebar) {
     group.append(button);
     return button;
   });
+  const extensionArea = extensionAreas.sidebarShortcuts;
+  let extensionRoot;
+  let extensionSession;
+  if (preferences?.registry.buttons(extensionArea).length) {
+    const host = document.createElement('div');
+    host.className = 'dwe-shortcut-extensions';
+    group.append(host);
+    extensionRoot = reactDomClient.createRoot(host);
+  }
 
   function clear() {
     group.remove();
@@ -123,6 +135,12 @@ export function installSidebarHeaderControls(sidebar) {
       observedStrip = strip;
     }
     const blockedByWidth = wideStrip && !hasSplitRoom(wideStrip);
+    const menuIcon = header.querySelector('button[class*="headerMenuButton"] svg');
+    const iconSize = menuIcon?.getBoundingClientRect().width;
+    const size = iconSize > 0 ? iconSize + 'px' : '';
+    if (group.style.getPropertyValue('--dwe-shortcut-icon-size') !== size) {
+      group.style.setProperty('--dwe-shortcut-icon-size', size);
+    }
     for (const [index, button] of proxies.entries()) {
       const source = sources[index];
       button.hidden = !source;
@@ -133,12 +151,22 @@ export function installSidebarHeaderControls(sidebar) {
       button.disabled = source.disabled || (index === 1 && Boolean(blockedByWidth));
       button.title = [reason || label, shortcut].filter(Boolean).join(' · ');
       button.setAttribute('aria-label', label);
+      for (const attribute of ['aria-pressed', 'aria-expanded']) {
+        const value = source.getAttribute(attribute);
+        if (value !== null) button.setAttribute(attribute, value);
+        else button.removeAttribute(attribute);
+      }
       if (shortcut) button.setAttribute('aria-keyshortcuts', shortcut);
       else button.removeAttribute('aria-keyshortcuts');
       const glyph = source.querySelector('svg');
       if (glyph && button.firstElementChild?.outerHTML !== glyph.outerHTML) button.replaceChildren(glyph.cloneNode(true));
     }
     if (group.parentElement !== corner) corner.append(group);
+    if (extensionRoot && session !== extensionSession) {
+      extensionSession = session;
+      extensionRoot.render(react.createElement(ExtensionButtons, { preferences, area: extensionArea,
+        context: Object.freeze({ sessionId: session }) }));
+    }
   }
 
   function schedule() {
@@ -154,7 +182,7 @@ export function installSidebarHeaderControls(sidebar) {
   observer.observe(document.body, {
     subtree: true, childList: true,
     attributes: true,
-    attributeFilter: ['disabled', 'hidden', 'aria-label', 'aria-keyshortcuts', 'data-sidebar-right-panel',
+    attributeFilter: ['disabled', 'hidden', 'aria-label', 'aria-keyshortcuts', 'aria-pressed', 'aria-expanded', 'data-sidebar-right-panel',
       'data-sidebar-right-open', 'data-dockkit-split-blocked', 'data-sidebar-right-mode'],
   });
   const stop = sidebar.mounted.subscribe(schedule);
@@ -166,6 +194,7 @@ export function installSidebarHeaderControls(sidebar) {
     resize.disconnect();
     window.removeEventListener('resize', schedule);
     cancelAnimationFrame(frame);
+    extensionRoot?.unmount();
     clear();
     if (sidebar.canSplitPane === canSplitPane) sidebar.canSplitPane = nativeCanSplit;
   };

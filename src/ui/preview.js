@@ -4,6 +4,7 @@ import { thumbnailType } from '../thumbnail-types.js';
 import { disks } from './workspace.js';
 import { PreviewUnavailable } from './preview-unavailable.js';
 import { PdfPreview } from './pdf-preview.js';
+import { OfficePreview } from './office-preview.js';
 import { useMediaViewport } from './preview-zoom.js';
 import { TextFilePreview } from './text-preview.js';
 import { formatSize } from './file-size.js';
@@ -11,6 +12,7 @@ import { VideoPreview } from './video-preview.js';
 import { MusicPreview } from './music-preview.js';
 import { audioType } from '../audio-types.js';
 import { fileIcon } from './file-icon.js';
+import { icon } from './interface-icon.js';
 
 const { createElement: h, useEffect, useRef, useState } = react;
 const coverActions = {
@@ -74,7 +76,7 @@ function ImagePreview({ url, name, onError }) {
     }));
 }
 
-export function Preview({ file, root, openImmediately = false, confirmed = openImmediately, onConfirm, onMinimize, onRestore, minimizeHost }) {
+export function Preview({ file, root, openImmediately = false, confirmed = openImmediately, onConfirm, onMinimize, onRestore, sendQuote }) {
   const dot = file.name.lastIndexOf('.');
   const extension = dot > 0 ? file.name.slice(dot + 1).toLowerCase() : '';
   const mediaType = thumbnailType(file.name);
@@ -83,22 +85,24 @@ export function Preview({ file, root, openImmediately = false, confirmed = openI
   }
   const audio = audioType(file.name);
   if (audio) {
-    return h(MusicPreview, { file, root, mime: audio, onMinimize, onRestore, minimizeHost });
+    return h(MusicPreview, { file, root, mime: audio, onMinimize, onRestore });
   }
-  return h(FilePreview, { file, root, openImmediately, confirmed, onConfirm, extension, mime: mediaType });
+  return h(FilePreview, { file, root, openImmediately, confirmed, onConfirm, extension, mime: mediaType, sendQuote });
 }
 
-function FilePreview({ file, root, openImmediately, confirmed, onConfirm, extension, mime }) {
+function FilePreview({ file, root, openImmediately, confirmed, onConfirm, extension, mime, sendQuote }) {
   const [result, setResult] = useState({ kind: 'loading' });
   const isHtml = extension === 'html' || extension === 'htm';
   const definition = previewDefinitions.find(entry => entry.extensions.includes(extension));
-  const isDocument = extension === 'pdf' || officeExtensions.has(extension);
+  const isOffice = officeExtensions.has(extension);
+  const isDocument = extension === 'pdf' || isOffice;
   const Body = previewBodies[definition?.id];
-  const waiting = Boolean(isHtml || isDocument || Body) && !confirmed;
+  const waiting = !isDocument && Boolean(isHtml || Body) && !confirmed;
   const isText = !isHtml && !isDocument && !Body && !mime;
+  const onQuote = sendQuote && (selection => sendQuote(file, selection));
 
   useEffect(() => {
-    if (waiting || isText) return;
+    if (waiting || isText || isOffice) return;
     const controller = new AbortController();
     const signal = controller.signal;
     let objectUrl;
@@ -134,15 +138,18 @@ function FilePreview({ file, root, openImmediately, confirmed, onConfirm, extens
       if (objectUrl) URL.revokeObjectURL(objectUrl);
       if (previewTicket) void disks.releasePreview(previewTicket);
     };
-  }, [file.absolute, root, waiting, Body, isDocument, isHtml, isText]);
+  }, [file.absolute, root, waiting, Body, isDocument, isHtml, isText, isOffice]);
 
   if (isText) return h(TextFilePreview, {
-    key: JSON.stringify([file.absolute, file.line, root]), file, root, standalone: openImmediately,
+    key: JSON.stringify([file.absolute, file.line, root]), file, root, standalone: openImmediately, onQuote,
   });
   if (waiting) {
-    const label = isHtml ? '打开网页预览' : isDocument ? '查看文档' : coverActions[definition?.id] ?? '查看预览';
+    const label = isHtml ? '打开网页预览' : coverActions[definition?.id] ?? '查看预览';
     return h(PreviewCover, { file, root, label, start: onConfirm });
   }
+  if (isOffice) return h(OfficePreview, {
+    key: JSON.stringify([file.absolute, root]), file, root, standalone: openImmediately, onQuote,
+  });
   switch (result.kind) {
     case 'html':
       return h('iframe', {
@@ -152,6 +159,7 @@ function FilePreview({ file, root, openImmediately, confirmed, onConfirm, extens
     case 'vendor':
       return h(result.Body, {
         content: { kind: 'bytes', data: result.data }, resourceAddress: file.address, wrap: true,
+        detailInitiallyOpen: openImmediately, detailToggleIcon: definition?.id === PREVIEW_IDS.archive ? icon('preview', 18) : undefined,
       });
     case 'pdf':
       return h(PdfPreview, { source: result.source, standalone: openImmediately });
@@ -163,6 +171,7 @@ function FilePreview({ file, root, openImmediately, confirmed, onConfirm, extens
     case 'unavailable':
       return h(PreviewUnavailable, { standalone: openImmediately });
     default:
-      return h('p', { className: 'dwe-preview-hint', role: 'status' }, isDocument ? '正在加载文档…' : '正在读取文件…');
+      return h('p', { className: 'dwe-preview-hint', role: 'status' },
+        isDocument ? '正在加载文档…' : '正在读取文件…');
   }
 }

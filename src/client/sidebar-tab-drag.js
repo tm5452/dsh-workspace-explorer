@@ -1,8 +1,8 @@
 const tabSelector = '[data-sidebar-right-panel] [data-dockkit-strip-tabs] [data-dockkit-tab]';
-const workspaceTabSelector = tabSelector + '[aria-selected="false"]:has([data-dwe-workspace-tab])';
+const workspaceTabSelector = tabSelector + '[aria-selected="false"]:has([data-dwe-workspace-fold])';
 const dragThreshold = 4; // Matches DockKit's per-axis drag threshold.
 
-export function installSidebarTabInteractions(mounted) {
+export function installSidebarTabInteractions(mounted, preferences) {
   const lifetime = new AbortController();
   const options = { capture: true, signal: lifetime.signal };
   let drag;
@@ -158,6 +158,9 @@ export function installSidebarTabInteractions(mounted) {
     reset();
     clearAnchors();
   });
+  const stopPreferences = preferences.subscribe(() => {
+    if (!preferences.get().workspaceTabsAutoCollapse) clearAnchors();
+  });
   window.addEventListener('pointerover', enterTab, options);
   window.addEventListener('pointerout', leaveTab, options);
   window.addEventListener('click', selectTab, options);
@@ -173,6 +176,7 @@ export function installSidebarTabInteractions(mounted) {
   return () => {
     lifetime.abort();
     stop();
+    stopPreferences();
     reset();
     clearAnchors();
   };

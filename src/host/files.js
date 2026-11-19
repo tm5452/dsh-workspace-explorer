@@ -1,10 +1,10 @@
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { lstat, open, opendir, readlink, realpath, stat } from 'node:fs/promises';
+import { lstat, open, opendir, readFile, readlink, realpath, stat } from 'node:fs/promises';
 import { win32 as path } from 'node:path';
 import { Readable } from 'node:stream';
 import { promisify } from 'node:util';
-import { officeExtensions } from '../document-types.js';
+import { officeAssetsPath, officeExtensions } from '../document-types.js';
 import { thumbnailType } from '../thumbnail-types.js';
 import { audioType } from '../audio-types.js';
 import { isWindowsBatch, underPath } from '../ui/navigation.js';
@@ -117,18 +117,19 @@ async function textLineOffset(handle, line, size, signal) {
   const buffer = Buffer.allocUnsafe(textWindowBytes);
   let position = 0;
   let lastStart = 0;
-  while (line > 1 && position < size) {
+  let firstLine = 1;
+  while (position < size) {
     const data = await readAt(handle, buffer, position, signal);
     if (!data.length) break;
     let newline = data.indexOf(10);
     while (newline >= 0) {
       lastStart = position + newline + 1;
-      if (--line === 1) return lastStart;
+      if (++firstLine === line) return { offset: lastStart, firstLine };
       newline = data.indexOf(10, newline + 1);
     }
     position += data.length;
   }
-  return lastStart;
+  return { offset: lastStart, firstLine };
 }
 
 function decodeTextWindow(data, labels, offset, eof) {
@@ -315,16 +316,15 @@ function createDiskAccess() {
     return { matches, truncated: false, skipped };
   }
 
-  async function read(input, limit, signal, workspace, { version, sniffText } = {}) {
+  async function read(input, limit, signal, workspace, { sniffText } = {}) {
     const target = await resolve(input, signal, workspace);
     const info = await stat(target);
     if (!info.isFile()) throw new BrowseError('只能预览普通文件');
-    if (!version && limit === maxBytes && info.size > limit) throw new BrowseError('文件超过 32 MB 读取上限', 413);
+    if (limit === maxBytes && info.size > limit) throw new BrowseError('文件超过 32 MB 读取上限', 413);
     const handle = await open(target, 'r');
     try {
       const opened = await handle.stat();
       if (!opened.isFile()) throw new BrowseError('只能预览普通文件');
-      if (version && fileVersion(opened) !== version) throw new BrowseError('文件已改变，请重新预览', 409);
       const buffer = Buffer.allocUnsafe(Math.min(opened.size, limit) + 1);
       let length = 0;
       while (length < buffer.length) {
@@ -336,37 +336,11 @@ function createDiskAccess() {
         length += bytesRead;
       }
       const eof = length <= limit && length <= opened.size;
-      if (!version && limit === maxBytes && (!eof || opened.size > limit)) throw new BrowseError('文件超过 32 MB 读取上限', 413);
-      if (version && (!eof || fileVersion(await handle.stat()) !== version)) {
-        throw new BrowseError('文件已改变，请重新预览', 409);
-      }
+      if (limit === maxBytes && (!eof || opened.size > limit)) throw new BrowseError('文件超过 32 MB 读取上限', 413);
       return { data: buffer.subarray(0, Math.min(length, limit)), eof };
     } finally {
       await handle.close();
     }
-  }
-
-  async function renderOffice(input, signal, workspace, converter) {
-    const absolute = normalizeLocalPath(input);
-    const extension = path.extname(absolute).slice(1).toLowerCase();
-    if (!officeExtensions.has(extension)) throw new BrowseError('不是可预览的 Office 格式');
-    const target = await resolve(absolute, signal, workspace);
-    const info = await stat(target);
-    if (!info.isFile()) throw new BrowseError('只能预览普通文件');
-    const version = fileVersion(info);
-    const result = await converter.convert({
-      extension, priority: 'foreground',
-      source: {
-        key: JSON.stringify(['dsh-workspace-explorer', workspace?.nativeRoot, target]),
-        version, bytes: info.size,
-        read: async (readSignal, budget) => {
-          if (!Number.isSafeInteger(budget) || budget < info.size) throw new BrowseError('文件超过 DSH Office 转换器的输入上限', 413);
-          const { data } = await read(absolute, info.size, readSignal, workspace, { version });
-          return { bytes: data, version };
-        },
-      },
-    }, signal);
-    return result.pdf;
   }
 
   async function readTextWindow(input, signal, workspace, cursor, line) {
@@ -378,7 +352,9 @@ function createDiskAccess() {
       if (!info.isFile()) throw new BrowseError('只能预览普通文件');
       const version = fileVersion(info);
       if (cursor && (cursor.version !== version || !Number.isSafeInteger(cursor.offset) ||
-          cursor.offset <= 0 || cursor.offset >= info.size || typeof cursor.encoding !== 'string')) {
+          cursor.offset <= 0 || cursor.offset >= info.size || typeof cursor.encoding !== 'string' ||
+          !Number.isSafeInteger(cursor.firstLine) || cursor.firstLine < 1 ||
+          !Number.isSafeInteger(cursor.firstColumn) || cursor.firstColumn < 1)) {
         throw new BrowseError('文本已更新，请重新预览', 409);
       }
       const python = /\.py$/i.test(input);
@@ -393,8 +369,8 @@ function createDiskAccess() {
         const eof = data.length >= info.size;
         return { text: decodePreviewText(data, eof, declared), eof, legacy: true, next: null };
       }
-      const offset = cursor?.offset ?? (Number.isSafeInteger(line) && line > 1
-        ? await textLineOffset(handle, line, info.size, signal) : 0);
+      const { offset, firstLine, firstColumn = 1 } = cursor ?? (Number.isSafeInteger(line) && line > 1
+        ? await textLineOffset(handle, line, info.size, signal) : { offset: 0, firstLine: 1 });
       let data = await readAt(handle, Buffer.allocUnsafe(Math.min(textWindowBytes, info.size - offset)), offset, signal);
       if (offset + data.length < info.size) {
         const newline = data.lastIndexOf(10);
@@ -404,7 +380,11 @@ function createDiskAccess() {
       const { text, length, encoding } = decodeTextWindow(data, labels, offset, offset + data.length >= info.size);
       if (fileVersion(await handle.stat()) !== version) throw new BrowseError('文本已更新，请重新预览', 409);
       const next = offset + length;
-      return { text, next: next < info.size ? { offset: next, encoding, version } : null };
+      const lines = text.split('\n');
+      return { text, firstLine, firstColumn, next: next < info.size ? {
+        offset: next, encoding, version, firstLine: firstLine + lines.length - 1,
+        firstColumn: (lines.length === 1 ? firstColumn : 1) + lines.at(-1).length,
+      } : null };
     } finally {
       await handle.close();
     }
@@ -587,7 +567,7 @@ function createDiskAccess() {
     }
   }
 
-  return { list, read, readTextWindow, renderOffice, locate, thumbnail, stage, rename, paste, recycle, scope, search };
+  return { list, read, readTextWindow, locate, thumbnail, stage, rename, paste, recycle, scope, search };
 }
 
 function byteRange(value, size) {
@@ -637,9 +617,48 @@ function crossSiteRequest(request) {
   }
 }
 
-export function registerDesktopFiles(ctx, getOfficeConverter = () => undefined) {
+const officeAssets = new Map([
+  ['viewer', ['viewer.html', 'text/html; charset=utf-8']],
+  ['client', ['viewer.js', 'text/javascript; charset=utf-8']],
+  ['engine', ['office-engine.embed.js', 'text/javascript; charset=utf-8']],
+]);
+
+function registerOfficeAssets(ctx) {
+  ctx.connection.fetch.register({
+    path: officeAssetsPath,
+    methods: ['GET'],
+    requestBody: 'buffered',
+    async fetch(request) {
+      if (crossSiteRequest(request)) return new Response(null, { status: 403 });
+      const asset = officeAssets.get(new URL(request.url).searchParams.get('file'));
+      if (!asset) return new Response(null, { status: 404 });
+      const [file, type] = asset;
+      const headers = {
+        'content-type': type,
+        'cache-control': file === 'office-engine.embed.js' ? 'private, max-age=3600' : 'no-store',
+        'x-content-type-options': 'nosniff',
+        'referrer-policy': 'no-referrer',
+        'cross-origin-resource-policy': 'same-origin',
+      };
+      if (file === 'viewer.html') {
+        headers['content-security-policy'] = "default-src 'none'; script-src 'self'; worker-src blob:; " +
+          "connect-src 'self'; style-src 'unsafe-inline'; img-src data: blob:; media-src blob:; font-src data: blob:; " +
+          "base-uri 'none'; form-action 'none'; frame-ancestors 'self'";
+      }
+      try {
+        const bytes = await readFile(new URL('../../assets/office-engine/' + file, import.meta.url));
+        return new Response(bytes, { headers });
+      } catch (error) {
+        return browseFailure(error);
+      }
+    },
+  });
+}
+
+export function registerDesktopFiles(ctx) {
   const disks = createDiskAccess();
   registerPdfAssets(ctx);
+  registerOfficeAssets(ctx);
   let writes = Promise.resolve();
   function write(action) {
     const result = writes.then(action);
@@ -650,18 +669,10 @@ export function registerDesktopFiles(ctx, getOfficeConverter = () => undefined) 
   const playbackTickets = new Map();
   const previewTickets = new Map();
   const playbackLifetime = 2 * 60 * 60 * 1000;
-  const previewBytesBudget = 128 * 1024 * 1024;
 
   function registerPreview(ticket) {
     const now = Date.now();
     for (const [key, value] of previewTickets) if (value.expires <= now) previewTickets.delete(key);
-    let bytes = [...previewTickets.values()].reduce((sum, value) => sum + (value.data?.length ?? 0), 0);
-    for (const [key, value] of previewTickets) {
-      if (bytes + (ticket.data?.length ?? 0) <= previewBytesBudget) break;
-      if (!value.data) continue;
-      previewTickets.delete(key);
-      bytes -= value.data.length;
-    }
     if (previewTickets.size >= 64) previewTickets.delete(previewTickets.keys().next().value);
     const key = randomUUID();
     previewTickets.set(key, { ...ticket, expires: now + playbackLifetime });
@@ -686,22 +697,9 @@ export function registerDesktopFiles(ctx, getOfficeConverter = () => undefined) 
       }
       try {
         const workspace = ticket.workspace && await disks.scope(ticket.workspace, request.signal);
-        let response;
-        if (ticket.data) {
-          const { data } = ticket;
-          const range = byteRange(request.headers.get('range') ?? '', data.length);
-          const headers = {
-            'accept-ranges': 'bytes', 'cache-control': 'no-store', 'content-type': ticket.type,
-            'x-content-type-options': 'nosniff', 'cross-origin-resource-policy': 'same-origin',
-          };
-          if (!range) return new Response(null, { status: 416, headers: { ...headers, 'content-range': 'bytes */' + data.length } });
-          const { start, end } = range;
-          headers['content-range'] = 'bytes ' + start + '-' + end + '/' + data.length;
-          headers['content-length'] = String(end - start + 1);
-          response = new Response(request.method === 'HEAD' ? null : data.subarray(start, end + 1), { status: 206, headers });
-        } else {
-          response = await disks.thumbnail(ticket.path, ticket.type, request, workspace, { version: ticket.version, preview: Boolean(preview) });
-        }
+        const response = await disks.thumbnail(ticket.path, ticket.type, request, workspace, {
+          version: ticket.version, preview: Boolean(preview),
+        });
         if (preview && response.ok) preview.expires = Date.now() + playbackLifetime;
         if (playback && response.ok && playbackTickets.get(token) === ticket) {
           ticket.expires = Date.now() + playbackLifetime;
@@ -754,25 +752,18 @@ export function registerDesktopFiles(ctx, getOfficeConverter = () => undefined) 
           });
           return json({ ok: true });
         }
-        if (operation === 'document-preview' || operation === 'image-preview') {
-          const path = normalizeLocalPath(input);
-          const extension = path.slice(path.lastIndexOf('.') + 1).toLowerCase();
+        if (operation === 'document-preview' || operation === 'image-preview' || operation === 'office-preview') {
+          const filePath = normalizeLocalPath(input);
+          const extension = path.extname(filePath).slice(1).toLowerCase();
           const image = operation === 'image-preview';
-          const type = image ? thumbnailType(path) : 'application/pdf';
-          if (image ? !type?.startsWith('image/') : extension !== 'pdf' && !officeExtensions.has(extension)) {
-            throw new BrowseError('此文件类型没有可用的预览');
-          }
-          if (!image && extension !== 'pdf') {
-            const converter = getOfficeConverter();
-            if (!converter) return json({ error: '当前 DSH 未提供 Office 转换服务' }, 503);
-            const data = await disks.renderOffice(input, signal, workspace, converter);
-            signal.throwIfAborted();
-            return json(registerPreview({ path, data, type, size: data.length, workspace: workspace?.root }));
-          }
-          const file = await disks.locate(path, signal, workspace, true);
+          const office = operation === 'office-preview';
+          const type = image ? thumbnailType(filePath) : office ? 'application/octet-stream' : 'application/pdf';
+          const supported = image ? type?.startsWith('image/') : office ? officeExtensions.has(extension) : extension === 'pdf';
+          if (!supported) throw new BrowseError('此文件类型没有可用的预览');
+          const file = await disks.locate(filePath, signal, workspace, true);
           if (file.type !== 'file') throw new BrowseError('只能预览普通文件');
           signal.throwIfAborted();
-          return json(registerPreview({ path, type, size: file.size, version: file.version, workspace: workspace?.root }));
+          return json(registerPreview({ path: filePath, type, size: file.size, version: file.version, workspace: workspace?.root }));
         }
         const modify = (action, inputs = [input]) => write(async () => {
           if (workspace) {
@@ -818,16 +809,11 @@ export function registerDesktopFiles(ctx, getOfficeConverter = () => undefined) 
           const { data, eof } = await disks.read(input, maxText, signal, workspace, { sniffText: !python });
           return json({ text: decodePreviewText(data, eof, python ? pythonSourceEncoding(data) : undefined), eof });
         }
-        if (operation === 'bytes' || operation === 'office') {
-          const converter = operation === 'office' ? getOfficeConverter() : undefined;
-          if (operation === 'office' && !converter) return json({ error: '当前 DSH 未提供 Office 转换服务' }, 503);
-          const data = converter
-            ? await disks.renderOffice(input, signal, workspace, converter)
-            : (await disks.read(input, maxBytes, signal, workspace)).data;
+        if (operation === 'bytes') {
+          const { data } = await disks.read(input, maxBytes, signal, workspace);
           // Chromium may discard media responses without their MIME type.
           const videoType = thumbnailType(input);
-          const type = converter ? 'application/pdf'
-            : audioType(input) ?? (videoType?.startsWith('video/') ? videoType : 'application/octet-stream');
+          const type = audioType(input) ?? (videoType?.startsWith('video/') ? videoType : 'application/octet-stream');
           return new Response(data, { headers: {
             'content-type': type,
             'cache-control': 'no-store', 'x-content-type-options': 'nosniff',

@@ -25,6 +25,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import './make-interface-icons.mjs';
 
+// Validate reviewed contribution definitions before writing the production bundle.
+await import('../src/extensions/index.js');
+
 const here = path.dirname(fileURLToPath(import.meta.url));
 const pkgRoot = path.resolve(here, '..');
 const srcRoot = path.join(pkgRoot, 'src');

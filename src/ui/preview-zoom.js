@@ -172,8 +172,7 @@ export function useMediaViewport(viewport, fullscreen = false) {
     }
 
     function start(event) {
-      if (event.button !== 0 || pointer || !surface.contains(event.target)) return;
-      if (event.target.closest('button, input')) return;
+      if (event.button !== 0 || pointer || event.target.closest('button, input')) return;
       pointer = { id: event.pointerId, x: event.clientX, y: event.clientY, dragging: false };
     }
 

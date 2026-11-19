@@ -1,6 +1,8 @@
 import { Preview, PreviewBoundary } from './preview.js';
 import { resourceAddress, underPath, windowsPath } from './navigation.js';
 import { fileIcon } from './file-icon.js';
+import { movePreview, PreviewFullscreenButton, PreviewNativeButton } from './preview-surface.js';
+import { PreviewExtensionButtons } from './extension-controls.js';
 
 const prefix = 'dsh-resource://workspace-explorer/preview/';
 const h = react.createElement;
@@ -25,7 +27,7 @@ function readAddress(address) {
   } catch { return; }
 }
 
-export function FilePreviewTab({ useTabInfo, restoreMusicPreview }) {
+export function FilePreviewTab({ useTabInfo, restoreMusicPreview, sendQuote, surface, parkPreview, onExit, onOpenNative, sessionId, preferences }) {
   const { tab } = useTabInfo();
   const address = tab.navigation.address;
   const line = tab.navigation.params?.line;
@@ -34,13 +36,31 @@ export function FilePreviewTab({ useTabInfo, restoreMusicPreview }) {
     absolute: target.absolute, name: target.name, address: resourceAddress(target.absolute),
     line: Number.isSafeInteger(line) && line > 0 ? line : undefined,
   }, [target, line]);
+  const anchor = react.useRef(null);
+  const [nativeError, setNativeError] = react.useState(null);
+  react.useLayoutEffect(() => {
+    if (!surface || tab.visible === false) return;
+    const destination = anchor.current;
+    movePreview(surface.host, destination);
+    return () => {
+      if (surface.host.parentNode === destination) parkPreview(surface);
+    };
+  }, [surface, tab.visible, parkPreview]);
 
   return h('section', { className: 'dwe dwe-preview', 'aria-label': file?.name ?? '文件预览' },
     h('div', { className: 'dwe-preview-body' },
-      file ? h(PreviewBoundary, { key: address, standalone: true },
-        h(Preview, { file, root: target.root, openImmediately: true,
+      surface ? h('div', { ref: anchor, className: 'dwe-preview-anchor' }) : file ? h(PreviewBoundary, { key: address, standalone: true },
+        h(Preview, { file, root: target.root, openImmediately: true, sendQuote,
           onRestore: restoreMusicPreview ? () => restoreMusicPreview(file) : undefined }))
-        : h('p', { className: 'dwe-preview-hint' }, '无法打开文件预览')));
+        : h('p', { className: 'dwe-preview-hint' }, '无法打开文件预览'),
+      file && onOpenNative && h(PreviewNativeButton, { disabled: !sessionId || tab.visible === false, async onClick() {
+        setNativeError(null);
+        try { await onOpenNative(file, target.root); }
+        catch (error) { setNativeError({ address, message: error?.message ?? String(error) }); }
+      } }),
+      file && onExit && h(PreviewFullscreenButton, { exit: true, onClick: () => onExit(file) }),
+      nativeError && nativeError.address === address && h('p', { className: 'dwe-preview-action-error dwe-error', role: 'alert' }, nativeError.message),
+      tab.visible !== false && h(PreviewExtensionButtons, { preferences, sessionId, file, mode: 'standalone' })));
 }
 
 export function previewTabLabel(address) {
