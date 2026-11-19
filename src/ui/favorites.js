@@ -1,4 +1,4 @@
-import { renamePath, underPath, windowsPath } from './navigation.js';
+import { pathKey, pathName, renamePath, underPath, localPath } from './navigation.js';
 import { icon } from './interface-icon.js';
 import { fileIcon } from './file-icon.js';
 
@@ -10,7 +10,7 @@ const listeners = new Set();
 function unique(paths) {
   const seen = new Set();
   return paths.filter(path => {
-    const id = path.toLowerCase();
+    const id = pathKey(path);
     if (seen.has(id)) return false;
     seen.add(id);
     return true;
@@ -20,7 +20,7 @@ function unique(paths) {
 function read() {
   try {
     const paths = JSON.parse(localStorage.getItem(key));
-    return Array.isArray(paths) ? unique(paths.map(windowsPath).filter(Boolean)) : [];
+    return Array.isArray(paths) ? unique(paths.map(path => localPath(path)).filter(Boolean)) : [];
   } catch { return []; }
 }
 
@@ -53,11 +53,11 @@ export function useFavorites() {
 }
 
 export function removeFavorite(path) {
-  update(folders.filter(folder => folder.toLowerCase() !== path.toLowerCase()));
+  update(folders.filter(folder => pathKey(folder) !== pathKey(path)));
 }
 
 export function toggleFavorite(path) {
-  if (folders.some(folder => folder.toLowerCase() === path.toLowerCase())) removeFavorite(path);
+  if (folders.some(folder => pathKey(folder) === pathKey(path))) removeFavorite(path);
   else update([...folders, path]);
 }
 
@@ -157,7 +157,7 @@ export function Favorites({ anchor, close, folders, navigate, currentPath, remov
     folders.length ? h('ul', { onDragLeave: event => {
       if (!event.currentTarget.contains(event.relatedTarget)) clearDropRow();
     } }, ...folders.map(path => {
-      const name = path.length === 3 ? path.slice(0, 2) : path.split('\\').at(-1);
+      const name = pathName(path);
       return h('li', {
         key: path, draggable: editing,
         onDragStart: event => {
@@ -189,7 +189,7 @@ export function Favorites({ anchor, close, folders, navigate, currentPath, remov
           'aria-disabled': editing || undefined,
           onClick: editing ? undefined : () => navigate(path),
           disabled: !editing && workspaceMode && !underPath(path, root),
-          'aria-current': currentPath?.toLowerCase() === path.toLowerCase() ? 'location' : undefined,
+          'aria-current': pathKey(currentPath) === pathKey(path) ? 'location' : undefined,
         }, fileIcon(name, 'directory'),
         h('span', { className: 'dwe-favorite-text' }, name)),
         editing && h('button', {

@@ -1,5 +1,5 @@
 import { Preview, PreviewBoundary } from './preview.js';
-import { resourceAddress, underPath, windowsPath } from './navigation.js';
+import { resourceAddress, underPath, localPath, pathName } from './navigation.js';
 import { fileIcon } from './file-icon.js';
 import { movePreview, PreviewFullscreenButton, PreviewNativeButton } from './preview-surface.js';
 import { PreviewExtensionButtons } from './extension-controls.js';
@@ -8,8 +8,8 @@ const prefix = 'dsh-resource://workspace-explorer/preview/';
 const h = react.createElement;
 
 export function previewTabAddress(file, root) {
-  const absolute = windowsPath(file.absolute);
-  const scope = root ? windowsPath(root) : null;
+  const absolute = localPath(file.absolute);
+  const scope = root ? localPath(root) : null;
   if (!absolute || (root && !underPath(absolute, scope))) return;
   return prefix + encodeURIComponent(absolute) + '/' + encodeURIComponent(scope ?? '');
 }
@@ -19,9 +19,9 @@ function readAddress(address) {
   const segments = address.slice(prefix.length).split('/');
   if (segments.length !== 2) return;
   try {
-    const absolute = windowsPath(decodeURIComponent(segments[0]));
-    const root = segments[1] ? windowsPath(decodeURIComponent(segments[1])) : null;
-    const name = absolute?.split('\\').at(-1);
+    const absolute = localPath(decodeURIComponent(segments[0]));
+    const root = segments[1] ? localPath(decodeURIComponent(segments[1])) : null;
+    const name = absolute ? pathName(absolute) : undefined;
     if (!name || (segments[1] && !underPath(absolute, root))) return;
     return { root, absolute, name };
   } catch { return; }

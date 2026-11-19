@@ -1,3 +1,5 @@
+import { isMac } from './platform.js';
+
 const { useEffect } = react;
 
 function wheelZoom(event, height, zoom) {
@@ -44,7 +46,7 @@ export function usePreviewZoom(viewport, renderAtZoom) {
     let settle;
 
     function wheel(event) {
-      if (!event.ctrlKey || !event.deltaY) return;
+      if (!(event.ctrlKey || (isMac && event.metaKey)) || !event.deltaY) return;
       event.preventDefault();
       event.stopPropagation();
       const next = wheelZoom(event, element.clientHeight, zoom);

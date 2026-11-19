@@ -1,15 +1,18 @@
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { lstat, open, opendir, readFile, readlink, realpath, stat } from 'node:fs/promises';
-import { win32 as path } from 'node:path';
+import { homedir } from 'node:os';
+import { posix, win32 } from 'node:path';
 import { Readable } from 'node:stream';
 import { promisify } from 'node:util';
 import { officeAssetsPath, officeExtensions } from '../document-types.js';
 import { thumbnailType } from '../thumbnail-types.js';
 import { audioType } from '../audio-types.js';
-import { isWindowsBatch, underPath } from '../ui/navigation.js';
+import { isWindowsBatch, pathKey, underPath } from '../ui/navigation.js';
 import { registerPdfAssets } from './pdf-assets.js';
 import { windowsFileOperation } from './shell-files.js';
+import { macFileOperation } from './mac-files.js';
+import { createLinuxFileOperations, scanLinuxRoots } from './linux-files.js';
 
 const execute = promisify(execFile);
 const endpoint = '/api/dsh.workspaceExplorer';
@@ -22,6 +25,13 @@ const maxBytes = 32 * 1024 * 1024;
 const maxFileOperations = 128;
 const driveCacheMs = 30_000;
 const invalidComponent = /[<>:"|?*\x00-\x1f]|[. ]$|^(?:CON|PRN|AUX|NUL|CONIN\$|CONOUT\$|COM[0-9¹²³]|LPT[0-9¹²³]) *(?:\.|$)/iu;
+const mac = process.platform === 'darwin';
+const linux = process.platform === 'linux';
+const windows = process.platform === 'win32';
+const posixPlatform = mac || linux;
+const path = posixPlatform ? posix : win32;
+const shellFileOperation = mac ? macFileOperation : windowsFileOperation;
+const clipboardUnavailable = (mac ? 'Mac' : 'Windows') + ' 剪贴板暂时不可用，请重试';
 
 // The official desktop shell forks dsh-desktop-host as a child process over IPC.
 // Asar- or single-process packagings (DSH NEXT and similar) run the host in the
@@ -30,8 +40,13 @@ const invalidComponent = /[<>:"|?*\x00-\x1f]|[. ]$|^(?:CON|PRN|AUX|NUL|CONIN\$|C
 const desktopHostEntry = /[\\/](?:@deepseek-ai[\\/]dsh-desktop-host[\\/]lib[\\/]index|lib[\\/]host)\.js$/i;
 
 export function isDesktopHost() {
-  return process.platform === 'win32' && Boolean(process.versions.electron)
-    && desktopHostEntry.test(process.argv[1] ?? '');
+  const entry = process.argv[1] ?? '';
+  if (linux && process.connected && /\/@deepseek-ai\/dsh-desktop-host\/lib\/index\.js$/.test(entry)) return true;
+  if (!posixPlatform && !windows) return false;
+  if (!process.versions.electron) return false;
+  // macOS packagings do not expose a stable argv[1] entry, so the Electron signal is what
+  // gates them; Windows keeps the stricter entry match.
+  return mac || desktopHostEntry.test(entry);
 }
 
 class BrowseError extends Error {
@@ -42,6 +57,14 @@ class BrowseError extends Error {
 }
 
 export function normalizeLocalPath(value) {
+  if (posixPlatform) {
+    if (typeof value !== 'string' || value.length > 32767 || !value.startsWith('/') || value.includes('\0')) {
+      throw new BrowseError(mac ? '请输入 Mac 上的绝对路径，例如 /Users/你的用户名/项目'
+        : '请输入 Linux 上的绝对路径，例如 /home/你的用户名/项目');
+    }
+    const absolute = path.normalize(value);
+    return absolute === '/' ? absolute : absolute.replace(/\/+$/, '');
+  }
   if (typeof value !== 'string' || value.length > 32767 || !/^[a-z]:[\\/]/i.test(value)) {
     throw new BrowseError('请输入盘符开头的绝对路径，例如 D:\\资料');
   }
@@ -63,6 +86,10 @@ function operationPaths(input) {
 
 function fileVersion(info) {
   return JSON.stringify([info.dev, info.ino, info.size, info.mtimeMs, info.ctimeMs]);
+}
+
+function fileIdentity(info) {
+  return info.dev + ':' + info.ino;
 }
 
 const pythonEncodingAliases = new Map([
@@ -164,6 +191,7 @@ function createDiskAccess() {
   let expires = 0;
   let scanning;
   let cutProgress;
+  let macClipboard;
   async function drives(force = false) {
     if (!force && cachedDrives && Date.now() < expires) return cachedDrives;
     scanning ??= scanDrives().then(result => {
@@ -181,13 +209,20 @@ function createDiskAccess() {
   }
 
   function requireNativeWithin(input, root) {
-    const prefix = root.endsWith('\\') ? root : root + '\\';
+    const prefix = root.endsWith(path.sep) ? root : root + path.sep;
     if (input !== root && !input.startsWith(prefix)) throw new BrowseError('此位置不在当前会话的工作区内', 403);
   }
 
   async function resolve(input, signal, workspace) {
     const absolute = normalizeLocalPath(input);
     if (workspace) requireWithin(absolute, workspace.root);
+    if (posixPlatform) {
+      signal.throwIfAborted();
+      const native = normalizeLocalPath(await realpath(absolute));
+      signal.throwIfAborted();
+      if (workspace) requireNativeWithin(native, workspace.nativeRoot);
+      return native;
+    }
     const localRoots = await drives();
     signal.throwIfAborted();
     async function walk(target, links = 0) {
@@ -222,12 +257,20 @@ function createDiskAccess() {
   async function scope(input, signal) {
     const root = normalizeLocalPath(input);
     const nativeRoot = normalizeLocalPath(await realpath(await resolve(root, signal)));
-    return { root: root.length > 3 ? root.replace(/\\+$/, '') : root, nativeRoot };
+    return { root: windows && root.length > 3 ? root.replace(/\\+$/, '') : root, nativeRoot };
   }
 
   async function list(input, signal, workspace) {
     if (input === null) {
       if (workspace) throw new BrowseError('此位置不在当前会话的工作区内', 403);
+      if (linux) return { entries: await scanLinuxRoots(), truncated: false };
+      if (mac) {
+        return { entries: [
+          { name: '个人文件夹', type: 'directory', path: homedir() },
+          { name: 'Mac 根目录', type: 'drive', path: '/' },
+          { name: '已挂载宗卷', type: 'directory', path: '/Volumes' },
+        ], truncated: false };
+      }
       const roots = await drives(true);
       return { entries: roots.map(root => ({
         name: '磁盘 (' + root.slice(0, 2) + ')', type: 'drive', path: root,
@@ -407,6 +450,9 @@ function createDiskAccess() {
     const folder = await realpath(await resolve(path.dirname(absolute), signal));
     const source = path.join(normalizeLocalPath(folder), name);
     const info = await lstat(source);
+    if (posixPlatform && info.isDirectory() && info.dev !== (await stat(folder)).dev) {
+      throw new BrowseError('不能对宗卷根目录执行此操作');
+    }
     if (info.isSymbolicLink()) await resolve(absolute, signal);
     else if (!info.isFile() && !info.isDirectory()) throw new BrowseError('此位置不是普通文件或文件夹');
     return { absolute, source, folder, info };
@@ -414,32 +460,48 @@ function createDiskAccess() {
 
   async function stage(inputs, cut, signal) {
     const sources = [];
+    const originalPaths = [];
+    const identities = new Map();
     for (const input of inputs) {
-      const { absolute } = await mutableEntry(input, signal);
-      sources.push(absolute);
+      const { absolute, source, info } = await mutableEntry(input, signal);
+      if (mac && info.isSymbolicLink()) throw new BrowseError('请在 Finder 中处理此符号链接');
+      sources.push(mac ? source : absolute);
+      originalPaths.push(absolute);
+      if (mac && cut) identities.set(absolute, fileIdentity(info));
     }
     signal.throwIfAborted();
     try {
-      const result = await windowsFileOperation({ action: 'stage', sources, cut });
+      if (mac) macClipboard = undefined;
+      const token = mac ? randomUUID() : undefined;
+      const result = await shellFileOperation({ action: 'stage', sources, cut, token });
+      if (mac) {
+        macClipboard = { sequence: result.sequence, token, paths: originalPaths, cut, identities };
+      }
       cutProgress = undefined;
-      return result;
-    } catch {
-      throw new BrowseError('Windows 剪贴板暂时不可用，请重试', 409);
+      return { ok: result.ok };
+    } catch (error) {
+      if (error?.code === 'DWE_MAC_OPERATION') throw error;
+      throw new BrowseError(clipboardUnavailable, 409);
     }
   }
 
   async function rename(input, name, signal) {
-    if (typeof name !== 'string' || !name.trim() || name.length > 255 || /[\\/]/.test(name)
-        || invalidComponent.test(name)) throw new BrowseError('请输入有效的 Windows 文件名');
-    const { absolute, source, folder } = await mutableEntry(input, signal);
+    const invalid = typeof name !== 'string' || !name.trim() || name.length > 255
+      || (mac ? /[\/:\0]/.test(name) || name === '.' || name === '..' : /[\\/]/.test(name) || invalidComponent.test(name));
+    if (invalid) throw new BrowseError('请输入有效的 ' + (mac ? 'Mac' : 'Windows') + ' 文件名');
+    const { absolute, source, folder, info } = await mutableEntry(input, signal);
+    if (mac && info.isSymbolicLink()) throw new BrowseError('请在 Finder 中处理此符号链接');
     const destination = path.join(folder, name);
     const renamed = path.join(path.dirname(absolute), name);
     if (destination === source) return { path: renamed, changed: [path.dirname(absolute), folder] };
     signal.throwIfAborted();
-    const { code } = await windowsFileOperation({ action: 'rename', source, destination });
-    if (code === 80 || code === 183) throw new BrowseError('此文件夹中已有同名项目', 409);
-    if (code === 5 || code === 32) throw new BrowseError('没有重命名权限，或文件正在使用', 403);
-    if (code !== 0) throw new BrowseError('Windows 无法重命名此项目（' + code + '）', 409);
+    const { code, result } = await shellFileOperation({ action: 'rename', source, destination });
+    if (result === 'missing') throw new BrowseError('文件或文件夹已不存在', 404);
+    if (result === 'exists' || code === 80 || code === 183) throw new BrowseError('此文件夹中已有同名项目', 409);
+    if (result === 'denied' || code === 5 || code === 32) throw new BrowseError('没有重命名权限，或文件正在使用', 403);
+    if (mac ? result !== 'ok' : code !== 0) {
+      throw new BrowseError(mac ? 'Mac 无法重命名此项目' : 'Windows 无法重命名此项目（' + code + '）', 409);
+    }
     return { path: renamed, changed: [path.dirname(absolute), folder] };
   }
 
@@ -447,19 +509,22 @@ function createDiskAccess() {
     const items = [];
     for (const input of inputs) {
       const item = await mutableEntry(input, signal);
-      if (item.info.isSymbolicLink()) throw new BrowseError('请在 Windows 资源管理器中删除此链接');
+      if (item.info.isSymbolicLink()) throw new BrowseError(mac ? '请在 Finder 中删除此符号链接' : '请在 Windows 资源管理器中删除此链接');
       items.push(item);
     }
     signal.throwIfAborted();
     let recycled = [];
     try {
-      const { results } = await windowsFileOperation({ action: 'recycle', sources: items.map(item => item.source) });
+      const { results } = await shellFileOperation({ action: 'recycle', sources: items.map(item => item.source) });
       recycled = items.filter((_, index) => results[index]);
     } catch (error) {
-      if (error?.code === 'ETIMEDOUT') throw error;
+      if (error?.code === 'ETIMEDOUT' || error?.code === 'DWE_MAC_OPERATION') throw error;
       // The Shell can throw when recycling is refused.
     }
-    if (!recycled.length) throw new BrowseError('无法移入 Windows 回收站，请检查权限或回收站设置', 409);
+    if (!recycled.length) {
+      throw new BrowseError(mac ? '无法移入废纸篓，请检查权限或宗卷是否支持此操作'
+        : '无法移入 Windows 回收站，请检查权限或回收站设置', 409);
+    }
     return {
       completed: recycled.length, failed: items.length - recycled.length,
       changed: recycled.flatMap(item => [path.dirname(item.absolute), item.folder]),
@@ -468,7 +533,8 @@ function createDiskAccess() {
   }
 
   async function checkTransferTree(item, signal) {
-    const refuseLink = () => new BrowseError('此项目含有链接或目录联接，请在 Windows 资源管理器中处理');
+    const refuseLink = () => new BrowseError(mac ? '此项目含有符号链接，请在 Finder 中处理'
+      : '此项目含有链接或目录联接，请在 Windows 资源管理器中处理');
     if (item.info.isSymbolicLink()) throw refuseLink();
     const folders = item.info.isDirectory() ? [item.source] : [];
     while (folders.length) {
@@ -477,30 +543,78 @@ function createDiskAccess() {
       for await (const entry of await opendir(folder)) {
         signal.throwIfAborted();
         if (entry.isSymbolicLink()) throw refuseLink();
+        if (mac && !entry.isDirectory() && !entry.isFile()) throw new BrowseError('此文件夹含有非普通文件，请在 Finder 中处理');
         if (entry.isDirectory()) folders.push(path.join(folder, entry.name));
       }
     }
   }
 
-  async function paste(input, signal) {
+  async function paste(input, signal, workspace) {
     const absolute = normalizeLocalPath(input);
-    const destination = normalizeLocalPath(await realpath(await resolve(absolute, signal)));
-    if (!(await stat(destination)).isDirectory()) throw new BrowseError('请选择文件夹作为粘贴位置');
+    let destination;
+    let destinationInfo;
+    try {
+      destination = mac ? await resolve(absolute, signal, workspace)
+        : normalizeLocalPath(await realpath(await resolve(absolute, signal)));
+      destinationInfo = await stat(destination);
+    } catch (error) {
+      if (mac && error?.code === 'ENOENT') throw new BrowseError('粘贴目标文件夹已不存在，请重新打开目标文件夹', 404);
+      throw error;
+    }
+    if (!destinationInfo.isDirectory()) throw new BrowseError('请选择文件夹作为粘贴位置');
     let clipboard;
-    try { clipboard = await windowsFileOperation({ action: 'clipboard' }); }
-    catch { throw new BrowseError('Windows 剪贴板暂时不可用，请重试', 409); }
+    try { clipboard = await shellFileOperation({ action: 'clipboard', token: macClipboard?.token }); }
+    catch (error) {
+      if (error?.code === 'DWE_MAC_OPERATION') throw error;
+      throw new BrowseError(clipboardUnavailable, 409);
+    }
+    if (mac && macClipboard) {
+      if (clipboard.token === macClipboard.token && clipboard.sequence === macClipboard.sequence) {
+        clipboard.paths = macClipboard.paths;
+        clipboard.cut = macClipboard.cut;
+      } else if (clipboard.token === macClipboard.token) {
+        throw new BrowseError('剪贴板已变化，请重新复制或剪切', 409);
+      } else {
+        macClipboard = undefined;
+      }
+    }
     if (!clipboard.paths.length) throw new BrowseError('剪贴板中没有可粘贴的文件或文件夹');
+    if (mac && clipboard.paths.some(value => value === null)) {
+      throw new BrowseError('剪贴板中的源文件已找不到，请在 Finder 中重新复制', 404);
+    }
     const paths = operationPaths(clipboard.paths);
+    const macCut = macClipboard?.cut ? macClipboard : undefined;
     const alreadyMoved = clipboard.cut && cutProgress?.sequence === clipboard.sequence ? cutProgress.paths : new Set();
     const sources = [];
+    const ancestors = new Set();
+    if (mac) {
+      for (let current = destination; ; current = path.dirname(current)) {
+        signal.throwIfAborted();
+        ancestors.add(fileIdentity(current === destination ? destinationInfo : await stat(current)));
+        if (current === '/') break;
+      }
+    }
     for (const input of paths) {
       if (alreadyMoved.has(input)) continue;
-      const item = await mutableEntry(input, signal);
-      const relative = path.relative(item.source.toLowerCase(), destination.toLowerCase());
-      if (item.info.isDirectory() && (!relative || (!relative.startsWith('..\\') && relative !== '..' && !path.isAbsolute(relative)))) {
+      let item;
+      try {
+        if (macCut && workspace) {
+          const native = await resolve(input, signal, workspace);
+          if (native === workspace.nativeRoot) throw new BrowseError('不能移动工作区根目录', 403);
+        }
+        item = await mutableEntry(input, signal);
+      } catch (error) {
+        if (mac && error?.code === 'ENOENT') throw new BrowseError('剪贴板中的源文件已找不到，请重新复制或剪切', 404);
+        throw error;
+      }
+      if (macCut && macCut.identities.get(input) !== fileIdentity(item.info)) {
+        throw new BrowseError('剪切的项目已变化，请重新剪切', 409);
+      }
+      if (item.info.isDirectory() && (mac ? ancestors.has(fileIdentity(item.info)) : underPath(destination, item.source))) {
         throw new BrowseError('不能将文件夹粘贴到自身或其子文件夹');
       }
-      if (clipboard.cut && item.folder.toLowerCase() === destination.toLowerCase()) {
+      if (clipboard.cut && (mac ? fileIdentity(await stat(item.folder)) === fileIdentity(destinationInfo)
+        : pathKey(item.folder) === pathKey(destination))) {
         throw new BrowseError('剪切项已在目标文件夹');
       }
       // The Shell may follow an NTFS junction when it recursively copies a folder.
@@ -508,8 +622,23 @@ function createDiskAccess() {
       sources.push(item);
     }
     if (!sources.length) throw new BrowseError('剪贴板中的剪切项已全部移动');
+    if (macCut && sources.some(item => sources.some(other => item !== other
+      && (item.source === other.source || (other.info.isDirectory() && underPath(item.source, other.source)))))) {
+      throw new BrowseError('请勿同时剪切文件夹及其中的项目');
+    }
+    if (macCut) {
+      let current;
+      try { current = await shellFileOperation({ action: 'clipboard', token: macCut.token }); }
+      catch (error) {
+        if (error?.code === 'DWE_MAC_OPERATION') throw error;
+        throw new BrowseError(clipboardUnavailable, 409);
+      }
+      if (current.sequence !== clipboard.sequence || current.token !== macCut.token) {
+        throw new BrowseError('剪贴板已变化，请重新剪切', 409);
+      }
+    }
     signal.throwIfAborted();
-    const { results } = await windowsFileOperation({
+    const { results } = await shellFileOperation({
       action: 'transfer', sources: sources.map(item => item.source), destination, cut: clipboard.cut,
     });
     const completed = results.filter(Boolean).length;
@@ -518,7 +647,7 @@ function createDiskAccess() {
         if (results[index]) alreadyMoved.add(item.absolute);
       }
       cutProgress = { sequence: clipboard.sequence, paths: alreadyMoved };
-      if (completed === sources.length) {
+      if (!mac && completed === sources.length) {
         await windowsFileOperation({ action: 'clearCut', sequence: clipboard.sequence }).catch(() => {});
       }
     }
@@ -567,7 +696,10 @@ function createDiskAccess() {
     }
   }
 
-  return { list, read, readTextWindow, locate, thumbnail, stage, rename, paste, recycle, scope, search };
+  return {
+    list, read, readTextWindow, locate, thumbnail, stage, rename, paste, recycle, scope, search,
+    ...(linux ? createLinuxFileOperations({ BrowseError, mutableEntry, normalizeLocalPath, resolve }) : {}),
+  };
 }
 
 function byteRange(value, size) {
@@ -581,11 +713,14 @@ function byteRange(value, size) {
 }
 
 const knownErrors = {
-  EACCES: ['Windows 拒绝访问此位置', 403],
-  EPERM: ['Windows 拒绝访问此位置', 403],
+  EACCES: ['系统拒绝访问此位置，请检查文件权限', 403],
+  EPERM: ['系统拒绝访问此位置，请检查文件权限', 403],
   ENOENT: ['文件或文件夹已不存在', 404],
   ENOTDIR: ['该路径不是文件夹', 400],
   EBUSY: ['该位置暂时不可用', 409],
+  ELOOP: ['路径包含循环或过多链接', 400],
+  EROFS: ['该位置是只读的', 403],
+  ENOSPC: ['磁盘空间不足', 507],
 };
 
 function json(value, status = 200) {
@@ -660,6 +795,9 @@ export function registerDesktopFiles(ctx) {
   registerPdfAssets(ctx);
   registerOfficeAssets(ctx);
   let writes = Promise.resolve();
+  if (disks.clearStaged && typeof ctx.effect === 'function') {
+    ctx.effect(() => () => { void writes.then(disks.clearStaged); });
+  }
   function write(action) {
     const result = writes.then(action);
     writes = result.catch(() => {});
@@ -684,9 +822,8 @@ export function registerDesktopFiles(ctx) {
     methods: ['GET', 'HEAD'],
     requestBody: 'buffered',
     async fetch(request) {
-      // Owner admission still applies, and every request is checked for a real
-      // cross-site origin. Media elements use a short-lived ticket because they
-      // cannot set our POST header.
+      // Owner admission and Desktop's origin normalization still apply. Media
+      // elements use a short-lived ticket because they cannot set our POST header.
       const token = new URL(request.url).searchParams.get('ticket');
       const playback = playbackTickets.get(token);
       const preview = previewTickets.get(token);
@@ -741,6 +878,7 @@ export function registerDesktopFiles(ctx) {
         if (operation === 'list') return json(await disks.list(input, signal, workspace));
         if (operation === 'locate') return json(await disks.locate(input, signal, workspace));
         if (operation === 'open-batch') {
+          if (!windows) throw new BrowseError('仅 Windows 支持启动批处理文件', 400);
           await write(async () => {
             const file = await disks.locate(input, signal, workspace);
             if (file.type !== 'file' || !isWindowsBatch(file.nativePath)) {
@@ -766,10 +904,11 @@ export function registerDesktopFiles(ctx) {
           return json(registerPreview({ path: filePath, type, size: file.size, version: file.version, workspace: workspace?.root }));
         }
         const modify = (action, inputs = [input]) => write(async () => {
-          if (workspace) {
+          if (workspace && !(posixPlatform && operation === 'paste')) {
             for (const input of inputs) {
               const target = await disks.locate(input, signal, workspace);
-              if (operation !== 'paste' && target.path.toLowerCase() === workspace.root.toLowerCase()) {
+              if (operation !== 'paste' && (posixPlatform ? target.nativePath === workspace.nativeRoot
+                : pathKey(target.path) === pathKey(workspace.root))) {
                 throw new BrowseError('不能对工作区根目录执行此操作', 403);
               }
             }
@@ -781,7 +920,7 @@ export function registerDesktopFiles(ctx) {
           return json(await modify(() => disks.stage(inputs, operation === 'cut', signal), inputs));
         }
         if (operation === 'rename') return json(await modify(() => disks.rename(input, name, signal)));
-        if (operation === 'paste') return json(await modify(() => disks.paste(input, signal)));
+        if (operation === 'paste') return json(await modify(() => disks.paste(input, signal, workspace)));
         if (operation === 'recycle') {
           const inputs = operationPaths(input);
           return json(await modify(() => disks.recycle(inputs, signal), inputs));
@@ -830,6 +969,7 @@ export function registerDesktopFiles(ctx) {
 
 function browseFailure(error) {
   if (error instanceof BrowseError) return json({ error: error.message }, error.status);
+  if (error?.code === 'DWE_MAC_OPERATION') return json({ error: error.message + '，详情见 Harness 日志' }, 500);
   if (error?.code === 'ETIMEDOUT') return json({ error: error.message }, 504);
   const [message, status] = knownErrors[error?.code] ?? ['无法读取该位置', 500];
   return json({ error: message }, status);

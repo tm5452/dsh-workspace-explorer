@@ -1,4 +1,4 @@
-import { windowsPath } from './navigation.js';
+import { pathName, localPath } from './navigation.js';
 
 const characters = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
 const marker = 'Explorer 引用';
@@ -33,7 +33,7 @@ export const quoteRule = {
     header.lastIndex = from;
     for (let match; (match = header.exec(text)); ) {
       const [, length, path, position] = match;
-      const absolute = windowsPath(path);
+      const absolute = localPath(path);
       if (!absolute) continue;
       const start = header.lastIndex;
       let end;
@@ -69,7 +69,7 @@ export function MessageQuote({ node, interactive, openFile }) {
   const children = [h('span', { key: 'mark', 'aria-hidden': true }, '❝'), ' ' + original];
   if (!interactive) return h('span', props, children);
   return h('button', {
-    ...props, type: 'button', 'aria-label': `在右侧栏打开 ${absolute.split('\\').at(-1)} 的引用：${quoteExcerpt(original).label}`,
+    ...props, type: 'button', 'aria-label': `在右侧栏打开 ${pathName(absolute)} 的引用：${quoteExcerpt(original).label}`,
     onClick: async () => setFailed(!await openFile(absolute)),
   }, children, failed && h('span', { role: 'status' }, ' · 无法打开'));
 }

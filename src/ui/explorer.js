@@ -1,4 +1,5 @@
-import { isWindowsBatch, joinPath, move, parentOf, renamePath, resourceAddress, samePath, underPath, visit, windowsPath } from './navigation.js';
+import { isWindowsBatch, joinPath, move, parentOf, pathKey, pathName, renamePath, resourceAddress, samePath, underPath, visit, localPath } from './navigation.js';
+import { isMac, isLinux, localHomeLabel, selectionModifier } from './platform.js';
 import { InlinePreview, movePreview, openNativePreview, PreviewFullscreenButton, PreviewNativeButton, PreviewWindowHandle } from './preview-surface.js';
 import { formatSize } from './file-size.js';
 import { disks } from './workspace.js';
@@ -17,6 +18,7 @@ import { extensionAreas } from '../extensions/registry.js';
 
 const { createElement: h, useEffect, useLayoutEffect, useRef, useState, useCallback, useSyncExternalStore } = react;
 const collator = new Intl.Collator('zh-CN', { numeric: true, sensitivity: 'base' });
+const trashLabel = isMac ? '废纸篓' : isLinux ? '回收站' : 'Windows 回收站';
 
 function tool(name, label, onClick, disabled = false, pressed) {
   return h(IconButton, { name: name === 'star' && pressed ? 'star-on' : name, label, onClick, disabled, pressed, toolId: name });
@@ -196,10 +198,6 @@ function entryType(entry) {
   return dot > 0 && dot < entry.name.length - 1 ? entry.name.slice(dot + 1).toUpperCase() + ' 文件' : '文件';
 }
 
-function pathName(path) {
-  return path.length === 3 ? path.slice(0, 2) : path.split('\\').at(-1);
-}
-
 function Breadcrumb({ path, navigate, dragFolder, showPathMenu, workspaceMode, root }) {
   const ref = useRef(null);
   useLayoutEffect(() => {
@@ -216,8 +214,8 @@ function Breadcrumb({ path, navigate, dragFolder, showPathMenu, workspaceMode, r
     return () => resize.disconnect();
   }, [path, root]);
   const crumbs = [];
-  for (let item = path; item && item.toLowerCase() !== root?.toLowerCase(); item = parentOf(item)) crumbs.unshift(item);
-  const baseLabel = root ? pathName(root) : workspaceMode ? '工作区不可用' : '此电脑';
+  for (let item = path; item && pathKey(item) !== pathKey(root); item = parentOf(item)) crumbs.unshift(item);
+  const baseLabel = root ? pathName(root) : workspaceMode ? '工作区不可用' : localHomeLabel;
   return h('nav', {
     ref, className: 'dwe-path', 'aria-label': '当前文件夹路径', title: path ?? baseLabel,
   },
@@ -357,7 +355,7 @@ export function Explorer({
   bindPreviewSurface, promotePreview, promotedSurfaces, preferences,
   previewPane, floatingPreview, detachPreview, closeFloatingPreview,
 }) {
-  const workspace = windowsPath(cwd);
+  const workspace = localPath(cwd);
   const [localHistory, setLocalHistory] = useState(() => saved.state?.localHistory
     ?? firstPath(initialPath === undefined ? workspace : initialPath));
   const [scoped, setScoped] = useState(() => {
@@ -413,11 +411,11 @@ export function Explorer({
   const [searchResult, setSearchResult] = useState(null);
   const term = root ? search.trim() : '';
   const path = history.paths[history.index];
-  const favorited = Boolean(path && favorites.some(folder => folder.toLowerCase() === path.toLowerCase()));
+  const favorited = Boolean(path && favorites.some(folder => pathKey(folder) === pathKey(path)));
   const viewKey = 'dsh-workspace-explorer.view:' + (path ?? 'home');
   const savedMode = react.useMemo(() => readViewMode(viewKey), [viewKey]);
   const grid = (viewModes.get(viewKey) ?? savedMode) === 'grid';
-  const sortKey = path ? 'dsh-workspace-explorer.sort:' + path.toLowerCase() : null;
+  const sortKey = path ? 'dsh-workspace-explorer.sort:' + pathKey(path) : null;
   const sortByModified = useSyncExternalStore(subscribeSortMode, () => readSortMode(sortKey));
   const ready = listing?.path === path && listing.root === root && listing.revision === revision ? listing : null;
   const entries = react.useMemo(() => [...(ready?.entries ?? [])].sort((a, b) =>
@@ -468,7 +466,7 @@ export function Explorer({
     setPreviewStack(stack => ({ ...stack, tabs: stack.tabs.map(tab => {
       const absolute = renamePath(tab.file.absolute, from, to);
       return absolute === tab.file.absolute ? tab : {
-        ...tab, file: { ...tab.file, absolute, name: absolute.split('\\').at(-1), address: resourceAddress(absolute) },
+        ...tab, file: { ...tab.file, absolute, name: pathName(absolute), address: resourceAddress(absolute) },
       };
     }) }));
   }, []);
@@ -641,28 +639,29 @@ export function Explorer({
   }
 
   function select(event, entry) {
-    const { shiftKey, ctrlKey } = event;
-    setSelection(current => selectNames(current, entry.name, entries, shiftKey, ctrlKey));
+    const { shiftKey } = event;
+    const toggle = selectionModifier(event);
+    setSelection(current => selectNames(current, entry.name, entries, shiftKey, toggle));
     setActionError('');
     setActionNotice('');
-    if (!shiftKey && !ctrlKey && entry.type === 'file') openPreview(joinPath(path, entry.name), entry.name, entry.size);
+    if (!shiftKey && !toggle && entry.type === 'file') openPreview(joinPath(path, entry.name), entry.name, entry.size);
   }
 
-  async function openWithWindows(path) {
+  async function openWithSystem(path) {
     try {
       const file = await disks.locate(path, undefined, root);
       if (file.type !== 'file') throw new Error('请选择普通文件');
       if (isWindowsBatch(file.nativePath)) await disks.openBatch(path, root);
       else await openLocal(file.nativePath);
     } catch (error) {
-      setActionError('无法用 Windows 打开文件 · ' + (error?.message || String(error)));
+      setActionError((isMac || isLinux ? '无法用默认应用打开文件' : '无法用 Windows 打开文件') + ' · ' + (error?.message || String(error)));
     }
   }
 
   function activate(entry) {
     const destination = entry.path ?? joinPath(path, entry.name);
     if (entry.type === 'directory' || entry.type === 'drive') navigate(destination);
-    else if (entry.type === 'file') void openWithWindows(destination);
+    else if (entry.type === 'file') void openWithSystem(destination);
   }
 
   function showMenu(event, entry) {
@@ -696,10 +695,10 @@ export function Explorer({
     { id: 'copy', label: '复制', icon: icon('copy'), disabled: !mutable || working },
     { id: 'cut', label: '剪切', icon: icon('cut'), disabled: !mutable || working },
     { id: 'paste', label: '粘贴', icon: icon('paste'), disabled: !pasteTarget || working },
-    { id: 'reveal', label: '在资源管理器中显示', icon: icon('external'), disabled: !oneEntry || !menu.absolute },
+    { id: 'reveal', label: isMac ? '在 Finder 中显示' : isLinux ? '在文件管理器中显示' : '在资源管理器中显示', icon: icon('external'), disabled: !oneEntry || !menu.absolute },
     { id: 'path', label: '复制文件路径', icon: icon('path'), disabled: !menu.absolute },
     { id: 'rename', label: '重命名', icon: icon('edit'), disabled: !oneEntry || !mutable || working },
-    { id: 'delete', label: '删除', icon: icon('delete'), disabled: !mutable || working },
+    { id: 'delete', label: isMac ? '移入废纸篓' : '删除', icon: icon('delete'), disabled: !mutable || working },
   ] : [{ id: 'paste', label: '粘贴', icon: icon('paste'), disabled: !pasteTarget || working }];
 
   function runMenuAction(action) {
@@ -731,9 +730,9 @@ export function Explorer({
       if (action === 'copy' || action === 'cut') {
         await disks.stage(paths, action === 'cut', root);
         const count = paths.length === 1 ? '' : ' ' + paths.length + ' 项';
-        setActionNotice(action === 'cut' ? '已剪切' + count + '，选择目标文件夹后粘贴' : '已复制' + count + '到剪贴板');
+        setActionNotice(action === 'cut' ? '已剪切' + count + '，选择目标文件夹后粘贴' : '已复制' + count + (isLinux ? '到插件剪贴板' : '到剪贴板'));
       } else if (action === 'path') {
-        await navigator.clipboard.writeText(paths.join('\r\n'));
+        await navigator.clipboard.writeText(paths.join(isMac || isLinux ? '\n' : '\r\n'));
         setActionNotice(paths.length === 1 ? '已复制路径' : '已复制 ' + paths.length + ' 个路径');
       } else if (action === 'reveal') {
         const target = await disks.locate(absolute, undefined, root);
@@ -742,7 +741,8 @@ export function Explorer({
         setActionNotice('正在粘贴…');
         const result = await disks.paste(destination, root);
         refreshDirectories(result.changed, result.moved);
-        if (result.failed) throw new Error('已处理 ' + result.completed + ' 项，' + result.failed + ' 项未完成，请检查权限或文件占用');
+        if (result.failed) throw new Error('已处理 ' + result.completed + ' 项，' + result.failed + ' 项未完成，'
+          + (result.message || '请检查权限、同名冲突或文件占用'));
         setActionNotice((result.cut ? '已移动 ' : '已粘贴 ') + result.completed + ' 项');
       }
     } catch (error) {
@@ -765,9 +765,9 @@ export function Explorer({
     setPreviewStack(stack => removeStackPreviews(stack, tab => result.removed.some(path => underPath(tab.file.absolute, path)), root));
     refreshDirectories(result.changed, result.removed);
     if (result.failed) {
-      setActionError('已移入回收站 ' + result.completed + ' 项，' + result.failed + ' 项未完成');
+      setActionError('已移入' + trashLabel + ' ' + result.completed + ' 项，' + result.failed + ' 项未完成');
     } else {
-      setActionNotice(deleting.length === 1 ? '已移入 Windows 回收站' : '已移入 Windows 回收站 ' + result.completed + ' 项');
+      setActionNotice((isMac ? '已移入' : '已移入 ') + trashLabel + (deleting.length === 1 ? '' : ' ' + result.completed + ' 项'));
     }
     scroll.current.focus();
   }
@@ -792,9 +792,10 @@ export function Explorer({
     pathRequest.current = controller;
     setLocating(true);
     try {
-      const target = await disks.locate(editor.trim().replace(/^"(.+)"$/, '$1'), signal, root);
+      const input = (isMac || isLinux) && editor.startsWith('/') ? editor : editor.trim().replace(/^"(.+)"$/, '$1');
+      const target = await disks.locate(input, signal, root);
       if (signal.aborted) return;
-      if (target.type === 'directory') navigate(windowsPath(target.path));
+      if (target.type === 'directory') navigate(localPath(target.path));
       else {
         closeEditor();
         openPreview(target.path, target.name, target.size);
@@ -821,7 +822,7 @@ export function Explorer({
 
   function keyboard(event) {
     if (event.defaultPrevented || event.shiftKey) return;
-    if (event.ctrlKey && !event.altKey && !event.metaKey && event.key.toLowerCase() === 'l') {
+    if (selectionModifier(event) && !event.altKey && !(isMac ? event.ctrlKey : event.metaKey) && event.key.toLowerCase() === 'l') {
       setEditor(path ?? '');
     } else if (!event.ctrlKey && !event.metaKey && event.altKey && event.key === 'ArrowLeft') historyStep(-1);
     else if (!event.ctrlKey && !event.metaKey && event.altKey && event.key === 'ArrowRight') historyStep(1);
@@ -858,7 +859,7 @@ export function Explorer({
         },
           editing ? h('form', { className: 'dwe-address', onSubmit: submitPath },
             h('input', {
-              type: 'text', 'aria-label': '输入本机路径', placeholder: '例如 D:\\资料', ref: input,
+              type: 'text', 'aria-label': '输入本机路径', placeholder: isMac ? '例如 /Users/你的用户名/项目' : isLinux ? '例如 /home/你的用户名/项目' : '例如 D:\\资料', ref: input,
               value: editor, onChange: event => { setEditor(event.target.value); setPathError(''); },
               readOnly: locating, spellCheck: false,
             }))
@@ -876,14 +877,14 @@ export function Explorer({
           tool('forward', '前进 (Alt+→)', () => historyStep(1), history.index === history.paths.length - 1),
           tool('up', '上一级 (Alt+↑)', goUp, !path || path === root),
           tool('refresh', '刷新文件夹', refresh),
-          tool('home', workspaceMode ? '返回工作区根目录' : '返回此电脑', () => navigate(root), path === root),
+          tool('home', workspaceMode ? '返回工作区根目录' : '返回' + localHomeLabel, () => navigate(root), path === root),
           tool('workspace', '跳转至工作区', () => navigate(workspace), !workspace || path === workspace || workspaceMode)),
         h('div', { className: 'dwe-nav' },
           h('span', { className: 'dwe-v-divider', 'aria-hidden': true }),
           tool('copy', '复制', () => runAction('copy', selectedEntries), !modifySelected),
           tool('cut', '剪切', () => runAction('cut', selectedEntries), !modifySelected),
           tool('paste', '粘贴', () => runAction('paste'), !path || working),
-          tool('delete', '删除', () => runAction('delete', selectedEntries), !modifySelected),
+          tool('delete', isMac ? '移入废纸篓' : '删除', () => runAction('delete', selectedEntries), !modifySelected),
           h('span', { className: 'dwe-v-divider', 'aria-hidden': true }),
           h('button', {
             type: 'button', className: 'dwe-tool dwe-expanding-tool dwe-scope-tool', 'aria-label': '工作区内浏览',
@@ -913,7 +914,7 @@ export function Explorer({
       (pathError || actionError) && h('p', { className: 'dwe-message dwe-error', role: 'alert' }, pathError || actionError),
       h('div', { className: 'dwe-list', ref: scroll, tabIndex: -1, 'aria-busy': term ? !found : Boolean(!ready && (!workspaceMode || root)),
         onClick: event => {
-          if (!event.ctrlKey && !event.shiftKey && !event.target.closest?.('.dwe-row')) setSelection(emptySelection);
+          if (!selectionModifier(event) && !event.shiftKey && !event.target.closest?.('.dwe-row')) setSelection(emptySelection);
         },
         onContextMenu: event => showMenu(event) },
         !term && !grid && h('div', { className: 'dwe-columns dwe-head', 'aria-hidden': true },
@@ -941,7 +942,7 @@ export function Explorer({
                     startDrag(event, composerItems(dragEntries(entry)), tab);
                   },
                   onClick: event => select(event, entry),
-                  onDoubleClick: event => { if (!event.ctrlKey && !event.shiftKey) activate(entry); },
+                  onDoubleClick: event => { if (!selectionModifier(event) && !event.shiftKey) activate(entry); },
                   onKeyDown: event => rowKeyboard(event, entry),
                 },
                 h('span', { className: 'dwe-name' },
@@ -1033,7 +1034,7 @@ function SearchResults({ found, select, canDrag, contextMenu, drag }) {
 }
 
 export function ExplorerTitle({ path, workspaceMode, autoCollapse }) {
-  const name = path === null ? '此电脑' : pathName(path);
+  const name = path === null ? localHomeLabel : pathName(path);
   return h('span', { 'data-dwe-tab-title': '', 'data-dwe-workspace-tab': workspaceMode || undefined,
     'data-dwe-workspace-fold': workspaceMode && autoCollapse || undefined, title: path ?? name },
     workspaceMode ? icon('file-folder-workspace', 16) : fileIcon('', 'directory'), h('span', null, name));

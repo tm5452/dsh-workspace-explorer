@@ -2,7 +2,8 @@ import { Explorer, ExplorerTitle } from '../ui/explorer.js';
 import { ExplorerPreferences } from '../ui/preferences.js';
 import { explorerCss } from '../ui/styles.js';
 import { scrollHorizontally } from '../ui/horizontal-wheel.js';
-import { parentOf, resourceAddress, samePath, sessionFilePath, underPath, windowsPath } from '../ui/navigation.js';
+import { parentOf, pathKey, pathName, resourceAddress, samePath, sessionFilePath, underPath, localPath } from '../ui/navigation.js';
+import { supportedPlatform, localHomeLabel } from '../ui/platform.js';
 import { renameFavorites } from '../ui/favorites.js';
 import { installConversationPathDrop } from '../ui/composer-drop.js';
 import { insertPreviewQuote } from '../ui/preview-quote.js';
@@ -45,7 +46,7 @@ const changesReviewPrefix = 'dsh-resource://changes-review/session/';
 
 function browseGroup(tabScope, sessionId, workspace) {
   if (tabScope === 'global') return 'global';
-  if (tabScope === 'workspace' && workspace) return 'workspace:' + workspace.toLowerCase();
+  if (tabScope === 'workspace' && workspace) return 'workspace:' + pathKey(workspace);
   return tabScope + ':session:' + sessionId;
 }
 
@@ -75,7 +76,7 @@ function CardIcon({ size = 26, className, computer = false }) {
 
 function apply(ctx) {
   if (location.protocol !== 'dsh-app:' || location.hostname !== 'app') return;
-  if (!navigator.platform.startsWith('Win')) return;
+  if (!supportedPlatform) return;
   const preferences = createPreferences();
   function Settings() { return h(ExplorerPreferences, { preferences }); }
   function SettingsIcon({ size = 16 }) { return icon('settings-explorer', size); }
@@ -363,7 +364,7 @@ function apply(ctx) {
     }
 
     function present(sessionId, cwd, tabScope = preferences.get().tabScope) {
-      const nextWorkspace = windowsPath(cwd) ?? undefined;
+      const nextWorkspace = localPath(cwd) ?? undefined;
       const group = browseGroup(tabScope, sessionId, nextWorkspace);
       const first = !presentedSession;
       const groupChanged = !first && group !== presentedGroup;
@@ -491,8 +492,8 @@ function apply(ctx) {
     async function statFile(sessionId, file, signal) {
       try {
         const result = await scope.remote.workspaceFiles.stat(sessionId, file, signal);
-        const absolute = windowsPath(result.ok && result.value.absolutePath);
-        if (absolute) return { absolute, name: absolute.split('\\').at(-1), size: result.value.bytes };
+        const absolute = localPath(result.ok && result.value.absolutePath);
+        if (absolute) return { absolute, name: pathName(absolute), size: result.value.bytes };
       } catch { /* The built-in preview can report a failed session file lookup. */ }
     }
 
@@ -645,7 +646,7 @@ function apply(ctx) {
         const description = document.getElementById(button.getAttribute('aria-describedby'));
         const sessionId = card?.closest('[data-conversation-content]')?.dataset.conversationSession;
         if (sessionId !== sidebar.mounted.getSnapshot() || !card?.contains(description)) return;
-        const absolute = windowsPath(description.textContent);
+        const absolute = localPath(description.textContent);
         if (absolute) return fileRequest(resourceAddress(absolute, sessionId));
       }
       function clickChangedFile(event) {
@@ -708,9 +709,9 @@ function apply(ctx) {
     }
 
     function refreshDirectories(paths, moved = []) {
-      const changed = new Set(paths.map(path => path.toLowerCase()));
+      const changed = new Set(paths.map(pathKey));
       for (const view of viewList) {
-        if (view.path && (changed.has(view.path.toLowerCase()) || moved.some(root => underPath(view.path, root)))) {
+        if (view.path && (changed.has(pathKey(view.path)) || moved.some(root => underPath(view.path, root)))) {
           view.fileActions?.refresh();
         }
       }
@@ -837,8 +838,8 @@ function apply(ctx) {
         h('span', { className: 'dwe-guide-copy' },
           h('span', { className: 'dwe-guide-title' }, title),
           description !== undefined && h('span', { className: 'dwe-guide-description' }, description))),
-        h('button', { type: 'button', className: 'dwe-guide-computer', title: '打开此电脑',
-          'aria-label': '打开此电脑',
+        h('button', { type: 'button', className: 'dwe-guide-computer', title: '打开' + localHomeLabel,
+          'aria-label': '打开' + localHomeLabel,
           onClick: () => openFromGuide(() => sidebar.openResource(computerPrefix + crypto.randomUUID(), {
             kind: tabKind, paneId: panel.id, replaceTab: tab.id,
           })),
@@ -854,7 +855,7 @@ function apply(ctx) {
       const tabScope = react.useSyncExternalStore(preferences.subscribe, () => preferences.get().tabScope);
       const followsWorkspace = currentGroup !== undefined && currentGroup !== 'global';
       // A departing group must finish with its own workspace before the incoming views mount.
-      const viewCwd = sessionId === presentedSession && browseGroup(tabScope, sessionId, windowsPath(cwd)) === currentGroup
+      const viewCwd = sessionId === presentedSession && browseGroup(tabScope, sessionId, localPath(cwd)) === currentGroup
         ? cwd : currentWorkspace;
       react.useLayoutEffect(() => {
         if (sessionId && sidebar.mounted.getSnapshot() === sessionId) present(sessionId, cwd, tabScope);

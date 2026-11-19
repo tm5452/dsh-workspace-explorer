@@ -1,5 +1,6 @@
 import { disks } from './workspace.js';
-import { windowsPath } from './navigation.js';
+import { pathName, localPath } from './navigation.js';
+import { isMac, isLinux } from './platform.js';
 import { createDropFrame } from './drop-overlay.js';
 
 const { useEffect, useRef } = react;
@@ -100,11 +101,15 @@ function conversationDropArea(sessionId) {
 
 function insertPaths(input, items) {
   if (!input?.addFiles) return false;
+  if ((isMac || isLinux) && items.some(({ path }) => /[\u0000-\u001f\u007f-\u009f"]/u.test(path))) {
+    input.notify('error', '此文件名无法作为路径引用，可改用附件或复制路径');
+    return true;
+  }
   const references = items.map(({ path, name, folder }) => {
-    const absolute = path.replaceAll('\\', '/');
+    const absolute = path.startsWith('/') ? path : path.replaceAll('\\', '/');
     const target = folder && !absolute.endsWith('/') ? absolute + '/' : absolute;
     const ref = /\s/u.test(target) ? '@"' + target + '"' : '@' + target;
-    const label = name || absolute.replace(/\/$/, '').split('/').at(-1);
+    const label = name || pathName(path);
     return { source: 'reference', ref, label, appearance: folder ? 'folder' : 'file', clipboardText: ref };
   });
   // Restore the draft selection before the insertion moves it past the new chips.
@@ -161,7 +166,7 @@ export function installConversationPathDrop(mounted, getInput) {
     try {
       const entries = [...event.dataTransfer.items].filter(item => item.kind === 'file');
       items = [...files].map((file, index) => ({
-        path: windowsPath(bridge.pathFor(file)), name: file.name,
+        path: localPath(bridge.pathFor(file)), name: file.name,
         folder: entries[index]?.webkitGetAsEntry?.()?.isDirectory === true,
       }));
     }

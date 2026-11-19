@@ -1,4 +1,7 @@
+import { isMac } from './platform.js';
+
 const { createElement: h, Fragment, useLayoutEffect, useRef, useState } = react;
+const trash = isMac ? '废纸篓' : '回收站';
 
 export function FileMenu({ menu, groups, close, invoke }) {
   const root = useRef(null);
@@ -86,7 +89,7 @@ export function DeleteDialog({ entries, close, remove }) {
       catch (error) { setError(error.message); setWorking(false); }
     },
   },
-  h('h2', null, entries.length === 1 ? '移入回收站？' : '将这 ' + entries.length + ' 项移入回收站？'),
+  h('h2', null, entries.length === 1 ? '移入' + trash + '？' : '将这 ' + entries.length + ' 项移入' + trash + '？'),
   entries.length === 1
     ? h('div', { className: 'dwe-delete-path', title: entries[0].absolute }, entries[0].absolute)
     : h('ul', { className: 'dwe-delete-path dwe-delete-paths' },
@@ -96,7 +99,7 @@ export function DeleteDialog({ entries, close, remove }) {
     h('button', { type: 'button', autoFocus: true, onClick: close, disabled: working }, '取消'),
     h('button', {
       type: 'submit', 'data-dwe-action': 'delete', disabled: working,
-    }, working ? '正在移入…' : '移入回收站'))));
+    }, working ? '正在移入…' : '移入' + trash))));
 }
 
 export function RenameDialog({ entry, close, rename }) {

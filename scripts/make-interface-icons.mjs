@@ -12,7 +12,7 @@ const colors = {
 const icons = {};
 
 for (const file of (await readdir(directory)).filter(file => file.endsWith('.svg')).sort()) {
-  const source = (await readFile(new URL(file, directory), 'utf8')).trim();
+  const source = (await readFile(new URL(file, directory), 'utf8')).replace(/\r\n/g, '\n').trim();
   const match = /^<svg\b([^>]*)>([\s\S]*)<\/svg>$/.exec(source);
   const viewBox = match?.[1].match(/\bviewBox="([^"]+)"/)?.[1];
   if (!viewBox || /<(?:script|foreignObject|image|style)\b|\son[a-z]+\s*=|\bhref="(?!#)/i.test(source)) {
