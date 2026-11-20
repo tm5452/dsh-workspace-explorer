@@ -92,25 +92,25 @@ PDF 和 Office 使用本机字节范围接口。DOCX、XLSX、PPTX 在浏览器 
 
 ## 界面实拍
 
-**Word 文档预览与划词引用**
+**「此电脑」与列表视图**
 
-![右侧栏的 Word 文档中选中文字，输入框里显示已添加的引用](docs/screenshots/1.2.2-word-quote.png)
-
-**分离预览窗**
-
-![PowerPoint 预览分离为浮窗，右侧栏继续显示文件列表](docs/screenshots/1.2.2-floating-preview.png)
-
-**拖动文件到会话**
-
-![从右侧栏拖动 PowerPoint 文件到会话，蓝框标出可放置区域](docs/screenshots/1.2.2-drag-to-chat.png)
+![「此电脑」在右侧栏列出本机盘符](docs/screenshots/1.2.2-file-browser.png)
 
 **大图标视图与图片预览**
 
 ![侧栏显示图片缩略图，下方窗格预览选中的图片](docs/screenshots/1.2.2-image-preview.png)
 
-**「此电脑」与列表视图**
+**Word 文档预览与划词引用**
 
-![「此电脑」在右侧栏列出本机盘符](docs/screenshots/1.2.2-file-browser.png)
+![右侧栏的 Word 文档中选中文字，输入框里显示已添加的引用](docs/screenshots/1.2.2-word-quote.png)
+
+**拖动文件到会话**
+
+![从右侧栏拖动 PowerPoint 文件到会话，蓝框标出可放置区域](docs/screenshots/1.2.2-drag-to-chat.png)
+
+**分离预览窗**
+
+![PowerPoint 预览分离为浮窗，右侧栏继续显示文件列表](docs/screenshots/1.2.2-floating-preview.png)
 
 ## 权限与限制
 
