@@ -92,23 +92,25 @@ PDF 和 Office 使用本机字节范围接口。DOCX、XLSX、PPTX 在浏览器 
 
 ## 界面实拍
 
+**Word 文档预览与划词引用**
+
+![右侧栏的 Word 文档中选中文字，输入框里显示已添加的引用](docs/screenshots/1.2.2-word-quote.png)
+
+**分离预览窗**
+
+![PowerPoint 预览分离为浮窗，右侧栏继续显示文件列表](docs/screenshots/1.2.2-floating-preview.png)
+
+**拖动文件到会话**
+
+![从右侧栏拖动 PowerPoint 文件到会话，蓝框标出可放置区域](docs/screenshots/1.2.2-drag-to-chat.png)
+
 **大图标视图与图片预览**
 
-![侧栏的大图标视图、图片缩略图和下方图片预览](docs/screenshots/1.2-image-preview.png)
+![侧栏显示图片缩略图，下方窗格预览选中的图片](docs/screenshots/1.2.2-image-preview.png)
 
-**视频播放**
+**「此电脑」与列表视图**
 
-![视频缩略图网格与正在播放的视频卡片](docs/screenshots/1.2-video-preview.png)
-
-**音频预览与音乐胶囊**
-
-![音频文件列表、音频预览和播放控制](docs/screenshots/1.2-audio-preview.png)
-
-![会话区的音乐胶囊与右侧的文件浏览标签](docs/screenshots/1.2-music-capsule.png)
-
-**深色模式与工作区浏览**
-
-![深色主题下的多标签栏、文件图标和工作区搜索栏](docs/screenshots/1.2-dark-workspace.png)
+![「此电脑」在右侧栏列出本机盘符](docs/screenshots/1.2.2-file-browser.png)
 
 ## 权限与限制
 
