@@ -1,8 +1,9 @@
 import { pdfAssetsPath } from '../document-types.js';
 import { PreviewUnavailable } from './preview-unavailable.js';
-import { usePreviewZoom } from './preview-zoom.js';
+import { previewTopInset, usePreviewZoom } from './preview-zoom.js';
+import { previewMovedEvent, previewWillMoveEvent } from './preview-surface.js';
 
-const { createElement: h, useEffect, useRef, useState } = react;
+const { createElement: h, useEffect, useLayoutEffect, useRef, useState } = react;
 
 function asset(file) {
   return new URL(pdfAssetsPath + '?file=' + file, location.href).href;
@@ -40,8 +41,8 @@ function loadRuntime() {
 
 const pageBatch = 24;
 
-const PdfPage = react.memo(function PdfPage({ pdf, number, initialSize, width, visible, renderZoom }) {
-  const [size, setSize] = useState(initialSize);
+const PdfPage = react.memo(function PdfPage({ pdf, number, initialSize, width, visible, renderZoom, position }) {
+  const [size, setSize] = useState(() => position.sizes?.get(number) ?? initialSize);
   const [failed, setFailed] = useState(false);
   const bitmapHost = useRef(null);
   useEffect(() => {
@@ -55,7 +56,9 @@ const PdfPage = react.memo(function PdfPage({ pdf, number, initialSize, width, v
         page = await pdf.getPage(number);
         if (canceled) return;
         const natural = page.getViewport({ scale: 1 });
-        setSize({ width: natural.width, height: natural.height });
+        const bounds = { width: natural.width, height: natural.height };
+        (position.sizes ??= new Map()).set(number, bounds);
+        setSize(bounds);
         const pageViewport = page.getViewport({ scale: Math.min(width / natural.width, 2) * renderZoom });
         const pixels = Math.min(window.devicePixelRatio || 1, 4096 / Math.max(pageViewport.width, pageViewport.height));
         // Retain the displayed page during zoom until PDF.js finishes drawing its replacement.
@@ -79,7 +82,7 @@ const PdfPage = react.memo(function PdfPage({ pdf, number, initialSize, width, v
       task?.cancel();
       page?.cleanup();
     };
-  }, [pdf, number, visible, width, renderZoom]);
+  }, [pdf, number, visible, width, renderZoom, position]);
 
   const displayWidth = Math.min(width, size.width * 2);
   return h('div', {
@@ -89,25 +92,101 @@ const PdfPage = react.memo(function PdfPage({ pdf, number, initialSize, width, v
   failed && h('p', { className: 'dwe-preview-hint' }, '第 ' + number + ' 页无法显示'));
 });
 
-function PdfPages({ pdf, initialSize }) {
+function rememberPosition(viewport, position) {
+  const pages = viewport.children;
+  if (!pages[0]?.dataset.pdfPage) return;
+  const top = viewport.scrollTop + previewTopInset(viewport);
+  let first = 0;
+  let last = pages.length - (viewport.lastElementChild.dataset.pdfPage ? 1 : 2);
+  while (first < last) {
+    const mid = Math.ceil((first + last) / 2);
+    if (pages[mid].offsetTop <= top) first = mid;
+    else last = mid - 1;
+  }
+  const page = pages[first];
+  if (!page.offsetHeight) return;
+  position.page = Number(page.dataset.pdfPage);
+  position.offset = (top - page.offsetTop) / page.offsetHeight;
+  position.atTop = viewport.scrollTop === 0;
+  position.horizontal = viewport.scrollLeft / Math.max(1, viewport.scrollWidth - viewport.clientWidth);
+}
+
+function restorePosition(viewport, position) {
+  if (!position.page) return true;
+  const page = viewport.querySelector('[data-pdf-page="' + position.page + '"]');
+  if (!page?.offsetHeight) return false;
+  viewport.scrollTop = position.atTop ? 0
+    : page.offsetTop + page.offsetHeight * position.offset - previewTopInset(viewport);
+  viewport.scrollLeft = (viewport.scrollWidth - viewport.clientWidth) * position.horizontal;
+  return true;
+}
+
+function PdfPages({ pdf, initialSize, position }) {
   const scroll = useRef(null);
+  const committedWidth = useRef(0);
+  const restoring = useRef(true);
   const [width, setWidth] = useState(0);
   const [visible, setVisible] = useState(() => new Set());
-  const [count, setCount] = useState(() => Math.min(pdf.numPages, pageBatch));
-  const [renderZoom, setRenderZoom] = useState(1);
-  usePreviewZoom(scroll, setRenderZoom);
+  const page = Math.min(position.page ?? 1, pdf.numPages);
+  const [count, setCount] = useState(() => Math.min(pdf.numPages, page + pageBatch - 1));
+  const [renderZoom, setRenderZoom] = useState(() => position.zoom ?? 1);
+  usePreviewZoom(scroll, setRenderZoom, position);
   const measured = width > 0;
-  useEffect(() => {
+
+  useLayoutEffect(() => {
     const viewport = scroll.current;
-    const observer = new ResizeObserver(() => setWidth(Math.max(0, viewport.clientWidth - 16)));
+    committedWidth.current = width;
+    if (restoring.current && width > 0 && viewport.clientWidth > 16) {
+      restoring.current = !restorePosition(viewport, position);
+    }
+  }, [width, count, position]);
+
+  useLayoutEffect(() => {
+    const viewport = scroll.current;
+    const controller = new AbortController();
+    const { signal } = controller;
+    let requestedWidth = 0;
+    function capture() {
+      if (!restoring.current && committedWidth.current > 0 && viewport.clientHeight
+          && viewport.clientWidth - 16 === committedWidth.current) rememberPosition(viewport, position);
+    }
+    function measure() {
+      const next = viewport.clientWidth - 16;
+      // A parked tab measures zero. Retain its page elements and reading position.
+      if (next <= 0 || !viewport.clientHeight) {
+        restoring.current = true;
+      } else if (next !== requestedWidth) {
+        requestedWidth = next;
+        restoring.current = true;
+        setWidth(next);
+      } else if (restoring.current && committedWidth.current === next) {
+        restoring.current = !restorePosition(viewport, position);
+      }
+    }
+    viewport.addEventListener('scroll', capture, { passive: true, signal });
+    document.addEventListener(previewWillMoveEvent, event => {
+      if (event.target.contains?.(viewport)) capture();
+    }, { signal });
+    document.addEventListener(previewMovedEvent, event => {
+      if (!event.target.contains?.(viewport)) return;
+      restoring.current = true;
+      measure();
+    }, { signal });
+    const observer = new ResizeObserver(measure);
     observer.observe(viewport);
-    return () => observer.disconnect();
-  }, []);
+    measure();
+    return () => {
+      capture();
+      controller.abort();
+      observer.disconnect();
+    };
+  }, [position]);
 
   useEffect(() => {
     if (!measured) return;
     const viewport = scroll.current;
     const observer = new IntersectionObserver(entries => {
+      if (!viewport.clientWidth || !viewport.clientHeight) return;
       setVisible(current => {
         const next = new Set(current);
         for (const entry of entries) {
@@ -128,12 +207,14 @@ function PdfPages({ pdf, initialSize }) {
 
   return h('div', { className: 'dwe-pdf-scroll', ref: scroll, tabIndex: 0, 'aria-label': '文档预览，共 ' + pdf.numPages + ' 页' },
     measured && Array.from({ length: count }, (_, index) => h(PdfPage, {
-      key: index + 1, pdf, number: index + 1, initialSize, width, renderZoom, visible: visible.has(index + 1),
+      key: index + 1, pdf, number: index + 1, initialSize, width, renderZoom, position, visible: visible.has(index + 1),
     })),
     measured && count < pdf.numPages && h('div', { key: 'more', className: 'dwe-pdf-more', 'aria-hidden': true }));
 }
 
-export function PdfPreview({ source, standalone }) {
+export function PdfPreview({ source, standalone, position }) {
+  const localPosition = useRef({});
+  const reading = position ?? localPosition.current;
   const [document, setDocument] = useState(null);
   const [failed, setFailed] = useState(false);
   useEffect(() => {
@@ -174,7 +255,13 @@ export function PdfPreview({ source, standalone }) {
         const pdf = await task.promise;
         if (signal.aborted) return;
         const first = await pdf.getPage(1);
-        if (!signal.aborted) setDocument({ pdf, initialSize: first.getViewport({ scale: 1 }) });
+        if (!signal.aborted) {
+          if (reading.page > pdf.numPages) {
+            reading.page = pdf.numPages;
+            reading.offset = 0;
+          }
+          setDocument({ pdf, initialSize: first.getViewport({ scale: 1 }) });
+        }
       } catch {
         if (!signal.aborted) setFailed(true);
       }
@@ -184,8 +271,8 @@ export function PdfPreview({ source, standalone }) {
       controller.abort();
       void task?.destroy().catch(() => {});
     };
-  }, [source]);
+  }, [source, reading]);
 
   if (failed) return h(PreviewUnavailable, { standalone });
-  return document ? h(PdfPages, document) : h('p', { className: 'dwe-preview-hint', role: 'status' }, '正在加载文档页面…');
+  return document ? h(PdfPages, { ...document, position: reading }) : h('p', { className: 'dwe-preview-hint', role: 'status' }, '正在加载文档页面…');
 }

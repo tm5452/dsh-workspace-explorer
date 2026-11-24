@@ -10,7 +10,9 @@ async function request(operation, path, signal, workspace, fields) {
   });
   if (!response.ok) {
     const body = await response.json().catch(() => null);
-    throw new Error(body?.error || '本机文件服务不可用（' + response.status + '）');
+    const error = new Error(body?.error || '本机文件服务不可用（' + response.status + '）');
+    error.status = response.status;
+    throw error;
   }
   return operation === 'bytes'
     ? new Uint8Array(await response.arrayBuffer()) : response.json();
@@ -31,6 +33,7 @@ export const disks = {
   playback: (path, signal, root) => request('playback', path, signal, root),
   stage: (paths, cut, root) => request(cut ? 'cut' : 'copy', fileSelection(paths), undefined, root),
   paste: (path, root) => request('paste', path, undefined, root),
+  createFolder: (path, root) => request('create-folder', path, undefined, root),
   rename: (path, name, root) => request('rename', path, undefined, root, { name }),
   recycle: (paths, root) => request('recycle', fileSelection(paths), undefined, root),
   search: (root, query, signal) => request('search', root, signal, undefined, { query }),

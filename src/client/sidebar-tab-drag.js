@@ -126,7 +126,7 @@ export function installSidebarTabInteractions(mounted, preferences) {
   }
 
   function start(event) {
-    if (event.pointerType !== 'mouse' || event.button !== 0) return;
+    if (!event.isTrusted || event.pointerType !== 'mouse' || event.button !== 0) return;
     reset();
     const target = event.target;
     if (!(target instanceof Element) || target.closest('button, [role="menu"]')) return;

@@ -1,9 +1,7 @@
 import { readFile } from 'node:fs/promises';
-import { createRequire } from 'node:module';
-import { dirname, join } from 'node:path';
 import { pdfAssetsPath } from '../document-types.js';
 
-const require = createRequire(import.meta.url);
+const bundledAssets = new URL('../../assets/pdf-engine/', import.meta.url);
 const assetName = /^(?:build\/pdf(?:\.worker)?\.min\.mjs|cmaps\/[\w.-]+\.bcmap|standard_fonts\/[\w.-]+\.(?:pfb|ttf)|wasm\/[\w.-]+\.(?:wasm|js))$/;
 
 export function registerPdfAssets(ctx) {
@@ -15,8 +13,7 @@ export function registerPdfAssets(ctx) {
       const file = new URL(request.url).searchParams.get('file');
       if (!file || !assetName.test(file)) return new Response(null, { status: 404 });
       try {
-        const root = dirname(require.resolve('pdfjs-dist/package.json'));
-        const data = await readFile(join(root, file));
+        const data = await readFile(new URL(file, bundledAssets));
         const contentType = file.endsWith('.wasm') ? 'application/wasm'
           : /\.m?js$/.test(file) ? 'text/javascript' : 'application/octet-stream';
         return new Response(data, { headers: {

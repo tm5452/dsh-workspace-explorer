@@ -15,12 +15,15 @@ function InterfaceIcon({ name, size, mark }) {
   const asset = interfaceIconAssets[name];
   const prefix = 'dwe-icon-' + react.useId();
   const artwork = { __html: uniqueMarkup(asset, prefix) };
+  const dockGlyph = 'dsw-icon-panel-left-outline-regular';
+  const hostIcon = name === 'dock-to-sidebar' && document.getElementById(dockGlyph)
+    ? react.createElement('use', { href: '#' + dockGlyph }) : null;
   return react.createElement('svg', {
     className: 'dwe-interface-icon', width: size, height: size,
     viewBox: asset.viewBox, fill: 'none', focusable: 'false', 'aria-hidden': true, 'data-dwe-interface-icon': name,
-    dangerouslySetInnerHTML: mark ? undefined : artwork,
+    dangerouslySetInnerHTML: mark || hostIcon ? undefined : artwork,
   }, mark ? react.createElement(react.Fragment, null,
-    react.createElement('g', { dangerouslySetInnerHTML: artwork }), mark) : undefined);
+    react.createElement('g', { dangerouslySetInnerHTML: artwork }), mark) : hostIcon);
 }
 
 export function icon(name, size = 22, mark) {

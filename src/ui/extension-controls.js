@@ -3,11 +3,11 @@ import { extensionAreas, reportExtensionError } from '../extensions/registry.js'
 
 const { createElement: h, useState, useSyncExternalStore } = react;
 
-export function IconButton({ name, label, onClick, disabled, pressed, className, toolId, extensionId, title }) {
+export function IconButton({ name, label, onClick, onContextMenu, disabled, pressed, className, toolId, extensionId, title }) {
   return h('button', {
     type: 'button', className: className ? 'dwe-tool ' + className : 'dwe-tool',
     'data-dwe-tool': toolId, 'data-dwe-extension-button': extensionId,
-    'aria-label': label, title: title ?? label, 'aria-pressed': pressed, onClick, disabled,
+    'aria-label': label, title: title ?? label, 'aria-pressed': pressed, onClick, onContextMenu, disabled,
   }, icon(name));
 }
 

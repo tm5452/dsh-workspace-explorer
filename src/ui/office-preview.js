@@ -105,11 +105,8 @@ function sheetSelection(event) {
 function officeAppearance(surface) {
   const body = surface?.closest('.dwe-preview-body');
   const style = body && getComputedStyle(body);
-  const count = body?.querySelectorAll(':scope > .dwe-preview-open-native, :scope > .dwe-preview-fullscreen').length ?? 0;
-  const size = parseFloat(style?.getPropertyValue('--dwe-tool-size')) || 28;
-  const gap = parseFloat(style?.getPropertyValue('--dwe-preview-action-gap')) || 6;
   const start = parseFloat(style?.getPropertyValue('--dwe-preview-action-inset')) || 10;
-  return { dark: darkTheme(), inset: surface ? Math.round(previewTopInset(surface)) : 0, outlineTop: start + count * (size + gap) };
+  return { dark: darkTheme(), inset: surface ? Math.round(previewTopInset(surface)) : 0, outlineTop: start };
 }
 
 export function OfficePreview({ file, root, standalone, onQuote }) {

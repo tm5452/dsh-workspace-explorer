@@ -76,21 +76,23 @@ function ImagePreview({ url, name, onError }) {
     }));
 }
 
-export function Preview({ file, root, openImmediately = false, confirmed = openImmediately, onConfirm, onMinimize, onRestore, sendQuote }) {
+export function Preview({ file, root, openImmediately = false, confirmed = openImmediately,
+  onConfirm, onRestore, sendQuote, pdfPosition,
+}) {
   const dot = file.name.lastIndexOf('.');
   const extension = dot > 0 ? file.name.slice(dot + 1).toLowerCase() : '';
   const mediaType = thumbnailType(file.name);
   if (mediaType?.startsWith('video/')) {
-    return h(VideoPreview, { file, root, mime: mediaType, confirmed, openImmediately, onConfirm });
+    return h(VideoPreview, { file, root, mime: mediaType, onConfirm });
   }
   const audio = audioType(file.name);
   if (audio) {
-    return h(MusicPreview, { file, root, mime: audio, onMinimize, onRestore });
+    return h(MusicPreview, { file, root, mime: audio, onRestore });
   }
-  return h(FilePreview, { file, root, openImmediately, confirmed, onConfirm, extension, mime: mediaType, sendQuote });
+  return h(FilePreview, { file, root, openImmediately, confirmed, onConfirm, extension, mime: mediaType, sendQuote, pdfPosition });
 }
 
-function FilePreview({ file, root, openImmediately, confirmed, onConfirm, extension, mime, sendQuote }) {
+function FilePreview({ file, root, openImmediately, confirmed, onConfirm, extension, mime, sendQuote, pdfPosition }) {
   const [result, setResult] = useState({ kind: 'loading' });
   const isHtml = extension === 'html' || extension === 'htm';
   const definition = previewDefinitions.find(entry => entry.extensions.includes(extension));
@@ -162,7 +164,7 @@ function FilePreview({ file, root, openImmediately, confirmed, onConfirm, extens
         detailInitiallyOpen: openImmediately, detailToggleIcon: definition?.id === PREVIEW_IDS.archive ? icon('preview', 18) : undefined,
       });
     case 'pdf':
-      return h(PdfPreview, { source: result.source, standalone: openImmediately });
+      return h(PdfPreview, { source: result.source, standalone: openImmediately, position: pdfPosition });
     case 'image':
       return h(ImagePreview, {
         url: result.source.url, name: file.name,

@@ -22,7 +22,7 @@ export function createDragIcon() {
   };
 }
 
-function cloneTabIcon(icon) {
+export function cloneTabIcon(icon) {
   const copy = icon.cloneNode(true);
   const elementsWithIds = copy.querySelectorAll('[id]');
   if (!elementsWithIds.length) return copy;
@@ -44,9 +44,9 @@ function cloneTabIcon(icon) {
   return copy;
 }
 
-export function createTabDragIcon(icon) {
+export function createTabDragIcon(icon, className = '') {
   const badge = document.createElement('div');
-  badge.className = 'dwe-sidebar-tab-drag';
+  badge.className = className ? 'dwe-sidebar-tab-drag ' + className : 'dwe-sidebar-tab-drag';
   badge.setAttribute('aria-hidden', 'true');
   if (icon) badge.append(cloneTabIcon(icon));
   else {
@@ -56,6 +56,7 @@ export function createTabDragIcon(icon) {
     badge.append(fallback);
   }
   return {
+    element: badge,
     move(x, y) {
       badge.style.setProperty('--dwe-drag-x', x + 12 + 'px');
       badge.style.setProperty('--dwe-drag-y', y + 12 + 'px');

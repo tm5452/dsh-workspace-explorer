@@ -4,6 +4,7 @@ import { ExtensionButtons } from '../ui/extension-controls.js';
 const panelSelector = '[data-sidebar-right-panel]';
 const cornerSelector = '[data-conversation-header-corner]';
 const stripSelector = '[data-dockkit-strip]';
+const expandSelector = 'button[data-sidebar-right-expand]:not(:disabled)';
 const toggleSelector = '[data-sidebar-right-toggle]';
 const modeSelector = '[data-sidebar-right-mode]';
 const splitSelector = '[data-dockkit-split-button]';
@@ -43,13 +44,15 @@ function hasSplitRoom({ strip, pane, split, chrome }) {
   return paneWidth / 2 - Math.max(0, paneWidth - stripWidth) >= fixed + (minTab || 100);
 }
 
-export function installSidebarHeaderControls(sidebar, preferences) {
+export function installSidebarHeaderControls(sidebar, preferences, floatDockHost) {
   const group = document.createElement('div');
   group.className = 'dwe-sidebar-header-controls';
+  group.setAttribute('data-dwe-shortcuts-detached', '');
   let sources = [];
   let frame = 0;
   let observedHeader;
   let observedStrip;
+  let anchor;
   let wideStrip;
   const nativeCanSplit = sidebar.canSplitPane;
   function canSplitPane(sessionId, paneId) {
@@ -60,10 +63,11 @@ export function installSidebarHeaderControls(sidebar, preferences) {
   const proxies = sourceSelectors.map((_, index) => {
     const button = document.createElement('button');
     button.type = 'button';
+    button.hidden = true;
     button.addEventListener('click', () => {
       const source = sources[index];
       if (index === 1 && wideStrip && !hasSplitRoom(wideStrip)) return;
-      if (source?.isConnected && sidebar.isExpanded()) source.click();
+      if (source?.isConnected) source.click();
     });
     group.append(button);
     return button;
@@ -77,9 +81,39 @@ export function installSidebarHeaderControls(sidebar, preferences) {
     group.append(host);
     extensionRoot = reactDomClient.createRoot(host);
   }
+  if (floatDockHost) group.append(floatDockHost);
+  // Keep the controls mounted while the host swaps the conversation header.
+  document.body.append(group);
+
+  function position(corner) {
+    if (anchor !== corner) {
+      if (anchor) {
+        anchor.removeAttribute('data-dwe-shortcut-offset');
+        resize.unobserve(anchor);
+      }
+      anchor = corner;
+      if (anchor) {
+        anchor.setAttribute('data-dwe-shortcut-offset', '');
+        resize.observe(anchor);
+      }
+    }
+    group.toggleAttribute('data-dwe-shortcuts-detached', !anchor);
+    if (!anchor) {
+      group.style.removeProperty('--dwe-shortcut-available-width');
+      return;
+    }
+    const bounds = anchor.getBoundingClientRect();
+    const toolSize = Number.parseFloat(getComputedStyle(group).getPropertyValue('--dwe-tool-size')) || 28;
+    const top = bounds.top + (bounds.height - toolSize) / 2;
+    const right = document.documentElement.clientWidth - bounds.right;
+    group.style.setProperty('--dwe-shortcut-top', top + 'px');
+    group.style.setProperty('--dwe-shortcut-right', right + 'px');
+    group.style.setProperty('--dwe-shortcut-available-width', Math.max(toolSize, bounds.right - 8) + 'px');
+  }
 
   function clear() {
-    group.remove();
+    position(null);
+    for (const button of proxies) button.hidden = true;
     for (const source of sources) source?.removeAttribute('data-dwe-header-proxied');
     sources = [];
     wideStrip?.strip.removeAttribute('data-dwe-wide-tabs');
@@ -91,27 +125,34 @@ export function installSidebarHeaderControls(sidebar, preferences) {
   function sync() {
     frame = 0;
     const session = sidebar.mounted.getSnapshot();
+    group.hidden = !session;
     const panel = session && document.querySelector(
       panelSelector + '[data-sidebar-right-session="' + CSS.escape(session) + '"]',
     );
+    const expanded = sidebar.isExpanded();
     const conversation = panel?.closest('[data-rightbar-col]')?.previousElementSibling;
-    const corner = conversation?.querySelector('header ' + cornerSelector);
+    let corner = conversation?.querySelector('header ' + cornerSelector);
+    if (session && !expanded && !corner?.querySelector(expandSelector)) {
+      corner = [...document.querySelectorAll(cornerSelector)].find(node => node.getClientRects().length
+        && !node.closest('[hidden], [inert], [aria-hidden="true"]') && node.querySelector(expandSelector));
+    }
     const header = corner?.closest('header');
     if (header !== observedHeader) {
       if (observedHeader) resize.unobserve(observedHeader);
       if (header) resize.observe(header);
       observedHeader = header;
     }
-    const chrome = panel?.querySelector(chromeSelector);
+    const chrome = expanded ? panel?.querySelector(chromeSelector) : null;
     const strip = chrome?.closest(stripSelector);
-    if (!sidebar.isExpanded() || panel?.dataset.sidebarRightPanel !== 'push' || !strip ||
-        !header || header.getBoundingClientRect().width < 180) {
+    if (!header || (expanded && (panel?.dataset.sidebarRightPanel !== 'push' || !strip
+        || header.getBoundingClientRect().width < 180))) {
       clear();
       return;
     }
 
-    const next = sourceSelectors.map(selector => strip.querySelector('button' + selector));
-    if (!next[0] || !next[2]) {
+    const next = expanded ? sourceSelectors.map(selector => strip.querySelector('button' + selector))
+      : [corner.querySelector(expandSelector), null, null];
+    if (!next[0] || (expanded && !next[2])) {
       clear();
       return;
     }
@@ -120,7 +161,7 @@ export function installSidebarHeaderControls(sidebar, preferences) {
     }
     sources = next;
     for (const source of sources) source?.setAttribute('data-dwe-header-proxied', '');
-    const pane = strip.closest('[data-dockkit-pane]');
+    const pane = strip?.closest('[data-dockkit-pane]');
     const splitButton = sources[1];
     if (wideStrip?.strip !== strip) wideStrip?.strip.removeAttribute('data-dwe-wide-tabs');
     wideStrip = undefined;
@@ -131,7 +172,7 @@ export function installSidebarHeaderControls(sidebar, preferences) {
     }
     if (strip !== observedStrip) {
       if (observedStrip) resize.unobserve(observedStrip);
-      resize.observe(strip);
+      if (strip) resize.observe(strip);
       observedStrip = strip;
     }
     const blockedByWidth = wideStrip && !hasSplitRoom(wideStrip);
@@ -161,7 +202,7 @@ export function installSidebarHeaderControls(sidebar, preferences) {
       const glyph = source.querySelector('svg');
       if (glyph && button.firstElementChild?.outerHTML !== glyph.outerHTML) button.replaceChildren(glyph.cloneNode(true));
     }
-    if (group.parentElement !== corner) corner.append(group);
+    position(corner);
     if (extensionRoot && session !== extensionSession) {
       extensionSession = session;
       extensionRoot.render(react.createElement(ExtensionButtons, { preferences, area: extensionArea,
@@ -196,6 +237,7 @@ export function installSidebarHeaderControls(sidebar, preferences) {
     cancelAnimationFrame(frame);
     extensionRoot?.unmount();
     clear();
+    group.remove();
     if (sidebar.canSplitPane === canSplitPane) sidebar.canSplitPane = nativeCanSplit;
   };
 }

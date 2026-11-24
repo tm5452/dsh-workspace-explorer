@@ -94,7 +94,7 @@ function MusicAction({ name, label, onClick, disabled }) {
     type: 'button', className: 'dwe-tool dwe-music-action dwe-music-' + name +
       (name === 'minimize' ? ' dwe-preview-media-action' : ''),
     title: label, 'aria-label': label, disabled, onClick,
-  }, icon('music-' + name));
+  }, icon(name === 'restore' ? 'preview-return-inline' : 'music-' + name));
 }
 
 function MusicCard({ track, file, active, playing }) {
@@ -141,7 +141,7 @@ function MusicCard({ track, file, active, playing }) {
     track?.failed && h('span', { className: 'dwe-music-error', role: 'status' }, '无法预览此音频'));
 }
 
-export function MusicPreview({ file, root, mime, onMinimize, onRestore }) {
+export function MusicPreview({ file, root, mime, onRestore }) {
   const [loaded, setLoaded] = useState(null);
   const state = useSyncExternalStore(subscribeMusic, musicSnapshot);
   const key = trackKey(file);
@@ -167,7 +167,7 @@ export function MusicPreview({ file, root, mime, onMinimize, onRestore }) {
   const minimize = onRestore && h(MusicAction, {
     name: 'minimize', label: '缩小为音乐胶囊',
     disabled: !track?.url || track.failed,
-    onClick: () => { if (minimizeMusic(track, onRestore)) onMinimize?.(); },
+    onClick: () => minimizeMusic(track, onRestore),
   });
   return h(react.Fragment, null,
     h('div', { className: 'dwe-music-viewport' },
@@ -284,7 +284,7 @@ function FloatingMusic({ state, sessionId }) {
     h('div', { className: 'dwe-music-capsule' },
       h(Cover, { track, playing }, playButton(track, playing, true)),
       h(MusicDetails, { track, file: track.file, active: true, playing, capsule: true }),
-      h(MusicAction, { name: 'restore', label: '返回预览页', onClick: restoreMusic })));
+      h(MusicAction, { name: 'restore', label: '返回预览窗', onClick: restoreMusic })));
 }
 
 export function MusicCapsule({ sessionId }) {

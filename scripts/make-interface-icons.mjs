@@ -5,14 +5,20 @@ const target = new URL('../src/ui/interface-icon-assets.js', import.meta.url);
 const colors = {
   '#270700': 'var(--dwe-icon-ink, #270700)',
   black: 'var(--dwe-icon-ink, #270700)',
+  '#A0A0A0': 'var(--dwe-icon-muted, #A0A0A0)',
   '#A69F9D': 'var(--dwe-icon-muted, #A69F9D)',
   '#F9FAFB': 'var(--dwe-icon-highlight, #F9FAFB)',
   '#BD4500': 'var(--dwe-icon-star-edge, #BD4500)',
 };
+const updatedToolbarIcons = new Set([
+  'back', 'copy', 'cut', 'delete', 'drive', 'favorites', 'forward', 'home', 'paste',
+  'preview', 'preview-fullscreen', 'preview-native', 'preview-open-sidebar', 'preview-open-window',
+  'preview-return-inline', 'reveal', 'up', 'workspace', 'workspace-scope',
+]);
 const icons = {};
 
 for (const file of (await readdir(directory)).filter(file => file.endsWith('.svg')).sort()) {
-  const source = (await readFile(new URL(file, directory), 'utf8')).trim();
+  const source = (await readFile(new URL(file, directory), 'utf8')).replace(/\r\n/g, '\n').trim();
   const match = /^<svg\b([^>]*)>([\s\S]*)<\/svg>$/.exec(source);
   const viewBox = match?.[1].match(/\bviewBox="([^"]+)"/)?.[1];
   if (!viewBox || /<(?:script|foreignObject|image|style)\b|\son[a-z]+\s*=|\bhref="(?!#)/i.test(source)) {
@@ -23,12 +29,16 @@ for (const file of (await readdir(directory)).filter(file => file.endsWith('.svg
     throw new Error(`Invalid interface SVG viewBox: ${file}`);
   }
   const name = file.slice(0, -4);
-  // The default artwork fills the disc. Icons use a centered 80% scale.
-  const renderedViewBox = name === 'music-default-cover'
+  const renderedViewBox = name === 'music-default-cover' || name === 'dock-to-sidebar'
     ? viewBox
     : [x - width / 8, y - height / 8, width * 1.25, height * 1.25].join(' ');
   const sourceMarkup = match[2].trim();
   const markup = name.startsWith('file-') || name === 'audio-file' ? sourceMarkup : sourceMarkup.replace(/\b(fill|stroke)="([^"]+)"/g, (attribute, kind, value) => {
+    if (name.startsWith('float-') && ['#374957', '#270700'].includes(value)) return kind + '="currentColor"';
+    if (updatedToolbarIcons.has(name)) {
+      if (['#270700', '#DD0000', 'black'].includes(value)) return kind + '="currentColor"';
+      if (value === '#48AD00') return kind + '="var(--dsw-alias-state-success-primary, #3a8a35)"';
+    }
     if (value === 'white' && name.startsWith('video-')) return `${kind}="var(--dwe-icon-video-foreground, white)"`;
     return colors[value] ? `${kind}="${colors[value]}"` : attribute;
   });

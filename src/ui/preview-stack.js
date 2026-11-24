@@ -2,41 +2,42 @@ import { samePath, underPath } from './navigation.js';
 
 export const emptyPreviewStack = { tabs: [], active: null, nextId: 1 };
 
+export function appendStackPreview(stack, file, root) {
+  const existing = stack.tabs.find(tab => samePath(tab.file.absolute, file.absolute));
+  if (existing) {
+    const line = file.line ?? existing.file.line;
+    const incomingOrigin = !existing.file.origin && file.origin;
+    const updated = line !== existing.file.line || incomingOrigin
+      ? { ...existing, file: incomingOrigin ? { ...file, line } : { ...existing.file, line } } : existing;
+    return {
+      ...stack, suspended: false, active: existing.id,
+      tabs: updated === existing ? stack.tabs : stack.tabs.map(tab => tab === existing ? updated : tab),
+    };
+  }
+  const id = stack.nextId;
+  return {
+    ...stack, suspended: false, active: id, nextId: id + 1,
+    tabs: [...stack.tabs, { id, file, root, confirmed: true }],
+  };
+}
+
 export function previewInScope(tab, root) {
   return !root || underPath(tab.file.absolute, root);
 }
 
-export function openStackPreview(stack, file, root) {
-  const { tabs, nextId } = stack;
-  const existing = tabs.find(tab => samePath(tab.file.absolute, file.absolute));
-  if (existing) {
-    const updated = file.line || existing.file.line !== file.line
-      ? tabs.map(tab => tab === existing ? { ...tab, file } : tab) : tabs;
-    return { ...stack, tabs: updated, active: existing.id };
-  }
-  const first = tabs.find(tab => previewInScope(tab, root));
-  if (first && !first.pinned) {
-    return { ...stack, tabs: tabs.map(tab => tab === first ? { ...tab, file, confirmed: false } : tab), active: first.id };
-  }
-  return { tabs: [{ id: nextId, file, pinned: false }, ...tabs], active: nextId, nextId: nextId + 1 };
+export function openInlinePreview(stack, file, root, surface) {
+  const existing = stack.tabs.find(tab => samePath(tab.file.absolute, file.absolute) && tab.root === root);
+  const id = existing?.id ?? stack.nextId;
+  return {
+    tabs: [{ id, file, root, confirmed: Boolean(surface || existing?.confirmed), surface: surface ?? existing?.surface }],
+    active: id, nextId: existing ? stack.nextId : id + 1,
+  };
 }
 
 export function confirmStackPreview(stack, id, file) {
   const target = stack.tabs.find(tab => tab.id === id && tab.file === file);
   if (!target || target.confirmed) return stack;
   return { ...stack, tabs: stack.tabs.map(tab => tab === target ? { ...tab, confirmed: true } : tab) };
-}
-
-export function moveStackPreview(stack, fromId, toId, after) {
-  const from = stack.tabs.findIndex(tab => tab.id === fromId);
-  const to = stack.tabs.findIndex(tab => tab.id === toId);
-  if (from < 0 || to < 0 || from === to) return stack;
-  const index = to + Number(after) - Number(from < to);
-  if (index === from) return stack;
-  const tabs = [...stack.tabs];
-  const [tab] = tabs.splice(from, 1);
-  tabs.splice(index, 0, tab);
-  return { ...stack, tabs };
 }
 
 export function removeStackPreviews(stack, shouldRemove, root) {

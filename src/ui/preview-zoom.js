@@ -1,4 +1,7 @@
-const { useEffect } = react;
+import { isMac } from './platform.js';
+import { previewMovedEvent } from './preview-surface.js';
+
+const { useEffect, useLayoutEffect } = react;
 
 function wheelZoom(event, height, zoom) {
   const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? height : 1;
@@ -35,16 +38,18 @@ function installPointerPan(element, signal, canPan, moveBy) {
   element.addEventListener('lostpointercapture', end, { signal });
 }
 
-export function usePreviewZoom(viewport, renderAtZoom) {
-  useEffect(() => {
+export function usePreviewZoom(viewport, renderAtZoom, position) {
+  useLayoutEffect(() => {
     const element = viewport.current;
     const controller = new AbortController();
     const { signal } = controller;
-    let zoom = 1;
+    let zoom = position.zoom ?? 1;
     let settle;
+    element.style.setProperty('--dwe-preview-zoom', zoom);
+    element.toggleAttribute('data-dwe-pan-ready', zoom > 1);
 
     function wheel(event) {
-      if (!event.ctrlKey || !event.deltaY) return;
+      if (!(event.ctrlKey || (isMac && event.metaKey)) || !event.deltaY) return;
       event.preventDefault();
       event.stopPropagation();
       const next = wheelZoom(event, element.clientHeight, zoom);
@@ -57,6 +62,7 @@ export function usePreviewZoom(viewport, renderAtZoom) {
       const ratio = next / zoom;
       const { scrollLeft, scrollTop } = element;
       zoom = next;
+      position.zoom = zoom;
       element.style.setProperty('--dwe-preview-zoom', zoom);
       element.toggleAttribute('data-dwe-pan-ready', zoom > 1);
       if (surface) {
@@ -83,7 +89,7 @@ export function usePreviewZoom(viewport, renderAtZoom) {
       controller.abort();
       clearTimeout(settle);
     };
-  }, [viewport, renderAtZoom]);
+  }, [viewport, renderAtZoom, position]);
 }
 
 function topBar(viewport) {
@@ -95,7 +101,7 @@ export function previewTopInset(viewport, top = viewport.getBoundingClientRect()
   return header ? Math.max(0, header.getBoundingClientRect().bottom - top) : 0;
 }
 
-export function useMediaViewport(viewport, fullscreen = false) {
+export function useMediaViewport(viewport) {
   useEffect(() => {
     const element = viewport.current;
     const controller = new AbortController();
@@ -103,9 +109,9 @@ export function useMediaViewport(viewport, fullscreen = false) {
     let zoom = 1;
     let x = 0;
     let y = 0;
-    const surface = element.firstElementChild;
-    const image = surface instanceof HTMLImageElement ? surface : null;
-    const header = fullscreen ? null : topBar(element);
+    const image = element.firstElementChild;
+    let header = null;
+    let moveFrame;
     let width = 0;
     let height = 0;
     let centerX = 0;
@@ -132,27 +138,29 @@ export function useMediaViewport(viewport, fullscreen = false) {
       }
     }
 
-    function measurePosition(view = element.getBoundingClientRect(), inset = previewTopInset(element, view.top, header)) {
+    function measurePosition(view = element.getBoundingClientRect(),
+      inset = previewTopInset(element, view.top)) {
       centerX = view.left + view.width / 2;
       centerY = view.top + (view.height + inset) / 2;
     }
 
     function measureGeometry() {
+      const nextHeader = topBar(element);
+      if (nextHeader !== header) {
+        if (header) observer.unobserve(header);
+        header = nextHeader;
+        if (header) observer.observe(header);
+      }
       const view = element.getBoundingClientRect();
       const inset = previewTopInset(element, view.top, header);
+      if (!view.width || view.height <= inset) return;
       width = view.width;
-      height = Math.max(0, view.height - inset);
+      height = view.height - inset;
       measurePosition(view, inset);
-      if (image) {
-        const ratio = image.naturalWidth / image.naturalHeight || 1;
-        fitWidth = Math.min(image.naturalWidth, width, height * ratio);
-        fitHeight = fitWidth / ratio;
-        image.style.setProperty('--dwe-fit-width', fitWidth + 'px');
-      } else {
-        const bounds = surface.getBoundingClientRect();
-        fitWidth = bounds.width / zoom;
-        fitHeight = bounds.height / zoom;
-      }
+      const ratio = image.naturalWidth / image.naturalHeight || 1;
+      fitWidth = Math.min(image.naturalWidth, width, height * ratio);
+      fitHeight = fitWidth / ratio;
+      image.style.setProperty('--dwe-fit-width', fitWidth + 'px');
       setOffset();
     }
 
@@ -216,16 +224,24 @@ export function useMediaViewport(viewport, fullscreen = false) {
     }, { capture: true, passive: true, signal });
     const observer = new ResizeObserver(measureGeometry);
     observer.observe(element);
-    if (header) observer.observe(header);
-    image?.addEventListener('load', measureGeometry, { signal });
+    // Moving a viewer can change the header without resizing the viewport.
+    document.addEventListener(previewMovedEvent, event => {
+      if (moveFrame !== undefined || !event.target.contains?.(element)) return;
+      moveFrame = requestAnimationFrame(() => {
+        moveFrame = undefined;
+        measureGeometry();
+      });
+    }, { signal });
+    image.addEventListener('load', measureGeometry, { signal });
     measureGeometry();
     return () => {
       end();
       controller.abort();
+      cancelAnimationFrame(moveFrame);
       observer.disconnect();
       element.style.removeProperty('--dwe-preview-zoom');
       element.style.removeProperty('--dwe-image-x');
       element.style.removeProperty('--dwe-image-y');
     };
-  }, [viewport, fullscreen]);
+  }, [viewport]);
 }

@@ -1,4 +1,5 @@
 import { extensions } from '../extensions/index.js';
+import { fileManagerLabel } from '../ui/platform.js';
 
 const preferenceKey = 'dsh-workspace-explorer.preferences';
 
@@ -17,6 +18,20 @@ export const buttonDisplays = {
 export const conversationFileViews = {
   split: '文件位置和预览',
   full: '全屏文件预览',
+};
+
+export const fileDoubleClickActions = {
+  native: '使用本机程序运行',
+  preview: '使用小窗打开',
+  sidebar: '使用右侧栏打开',
+  fullscreen: '使用全屏打开',
+  reveal: '在' + fileManagerLabel + '中显示',
+};
+
+export const quickFloatMinimizeActions = {
+  anywhere: '任意区域三击',
+  composer: '对话框双击',
+  none: '无',
 };
 
 export const gestureDirections = [
@@ -39,6 +54,10 @@ function normalize(value) {
   return {
     tabScope: Object.hasOwn(tabScopes, value?.tabScope) ? value.tabScope : 'global',
     conversationFileView: Object.hasOwn(conversationFileViews, value?.conversationFileView) ? value.conversationFileView : 'split',
+    fileDoubleClick: Object.hasOwn(fileDoubleClickActions, value?.fileDoubleClick) ? value.fileDoubleClick : 'preview',
+    quickFloatMinimize: Object.hasOwn(quickFloatMinimizeActions, value?.quickFloatMinimize) ? value.quickFloatMinimize : 'composer',
+    initialSidebarPercent: Number.isInteger(Number(value?.initialSidebarPercent)) && Number(value.initialSidebarPercent) >= 15 && Number(value.initialSidebarPercent) <= 80
+      ? Number(value.initialSidebarPercent) : 30,
     newTabPreviewOpen: value?.newTabPreviewOpen !== false,
     workspaceTabsAutoCollapse: value?.workspaceTabsAutoCollapse !== false,
     favoritesDisplay: Object.hasOwn(buttonDisplays, value?.favoritesDisplay) ? value.favoritesDisplay : 'auto',

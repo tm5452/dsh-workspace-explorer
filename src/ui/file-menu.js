@@ -1,6 +1,8 @@
+import { trashLabel } from './platform.js';
+
 const { createElement: h, Fragment, useLayoutEffect, useRef, useState } = react;
 
-export function FileMenu({ menu, groups, close, invoke }) {
+export function FileMenu({ menu, groups, close, invoke, label = '文件操作' }) {
   const root = useRef(null);
   useLayoutEffect(() => {
     const node = root.current;
@@ -35,11 +37,12 @@ export function FileMenu({ menu, groups, close, invoke }) {
         index > 0 && item.id === 'reveal' && h('div', { className: 'dwe-file-menu-divider', role: 'separator' }),
         h('button', {
           type: 'button', role: 'menuitem', disabled: item.disabled, 'data-dwe-action': item.id,
+          'data-dwe-destructive': item.destructive || undefined,
           onClick: () => invoke(item.id),
         }, item.icon, h('span', null, item.label))))));
 
   return reactDom.createPortal(h('div', {
-    ref: root, className: 'dwe-file-menu', role: 'menu', 'aria-label': '文件操作', tabIndex: -1,
+    ref: root, className: 'dwe-file-menu', role: 'menu', 'aria-label': label, tabIndex: -1,
     onContextMenu: event => event.preventDefault(),
     onKeyDown: event => {
       if (event.key === 'Escape') {
@@ -86,7 +89,7 @@ export function DeleteDialog({ entries, close, remove }) {
       catch (error) { setError(error.message); setWorking(false); }
     },
   },
-  h('h2', null, entries.length === 1 ? '移入回收站？' : '将这 ' + entries.length + ' 项移入回收站？'),
+  h('h2', null, entries.length === 1 ? '移入' + trashLabel + '？' : '将这 ' + entries.length + ' 项移入' + trashLabel + '？'),
   entries.length === 1
     ? h('div', { className: 'dwe-delete-path', title: entries[0].absolute }, entries[0].absolute)
     : h('ul', { className: 'dwe-delete-path dwe-delete-paths' },
@@ -96,7 +99,7 @@ export function DeleteDialog({ entries, close, remove }) {
     h('button', { type: 'button', autoFocus: true, onClick: close, disabled: working }, '取消'),
     h('button', {
       type: 'submit', 'data-dwe-action': 'delete', disabled: working,
-    }, working ? '正在移入…' : '移入回收站'))));
+    }, working ? '正在移入…' : '移入' + trashLabel))));
 }
 
 export function RenameDialog({ entry, close, rename }) {

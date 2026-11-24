@@ -1,4 +1,5 @@
-import { buttonDisplays, conversationFileViews, gestureActions, gestureDirections, tabScopes } from '../client/preferences.js';
+import { buttonDisplays, conversationFileViews, fileDoubleClickActions, gestureActions, gestureDirections,
+  quickFloatMinimizeActions, tabScopes } from '../client/preferences.js';
 import { icon } from './interface-icon.js';
 
 const { createElement: h, useId, useSyncExternalStore } = react;
@@ -15,12 +16,16 @@ function PreferenceLabel({ id, label, illustration, description }) {
     description && h('p', { id: id + '-description', className: 'dwe-preference-description' }, description));
 }
 
-function PreferenceRow({ label, illustration, description, value, options, change }) {
+function PreferenceRow({ label, illustration, description, value, options, range, change }) {
   const id = useId();
   const control = { id, 'aria-describedby': description ? id + '-description' : undefined };
   return h('div', { className: 'dwe-preference-row' },
     h(PreferenceLabel, { id, label, illustration, description }),
-    options ? h('div', { className: 'dwe-preference-select' },
+    range ? h('div', { className: 'dwe-preference-range' },
+      h('input', { ...control, type: 'range', min: range.min, max: range.max, step: 1, value,
+        'aria-valuetext': value + '%', onChange: event => change(event.target.valueAsNumber) }),
+      h('output', { htmlFor: id }, value + '%'))
+      : options ? h('div', { className: 'dwe-preference-select' },
       h('select', { ...control, value, onChange: event => change(event.target.value) },
         Object.entries(options).map(([id, text]) => h('option', { key: id, value: id }, text))),
       h('span', { className: 'dwe-preference-chevron', 'aria-hidden': true }))
@@ -35,7 +40,7 @@ function PreferenceRow({ label, illustration, description, value, options, chang
 export function ExplorerPreferences({ preferences }) {
   const state = useSyncExternalStore(preferences.subscribe, preferences.get);
   const { tabScope, gesturesEnabled, gestures, newTabPreviewOpen, workspaceTabsAutoCollapse,
-    favoritesDisplay, workspaceButtonDisplay, conversationFileView } = state;
+    favoritesDisplay, workspaceButtonDisplay, conversationFileView, initialSidebarPercent, fileDoubleClick } = state;
   const setting = (name, label, value, options, detail) => h(PreferenceRow, {
     label, value, options, ...detail, change: next => preferences.update({ [name]: next }),
   });
@@ -44,6 +49,10 @@ export function ExplorerPreferences({ preferences }) {
       h('legend', null, '右侧栏与会话', h('br'), '交互方式'),
       h('div', { className: 'dwe-preference-rows' },
         setting('tabScope', '文件浏览标签与会话的关系', tabScope, tabScopes, { description: scopeDescriptions[tabScope] }),
+        setting('initialSidebarPercent', '初始侧栏占窗口宽度', initialSidebarPercent, undefined,
+          { range: { min: 15, max: 80 }, description: '首次使用时生效。已调整过的侧栏宽度会随布局保存。' }),
+        setting('fileDoubleClick', '鼠标双击文件时的操作', fileDoubleClick, fileDoubleClickActions),
+        setting('quickFloatMinimize', '快速收回所有小窗', state.quickFloatMinimize, quickFloatMinimizeActions),
         setting('conversationFileView', '从会话中打开文件的方式', conversationFileView, conversationFileViews),
         setting('newTabPreviewOpen', '新建标签页时开启预览窗格', newTabPreviewOpen, undefined,
           { description: '仅用于通过顶部「＋」打开开始页后创建的标签。' }),

@@ -21,7 +21,6 @@ const outlines = {
 
 export function mediaIcon(name, size) {
   if (name === 'replay') return icon('video-replay', size);
-  if (name === 'exitFullscreen') return icon('preview-exit-fullscreen', size);
   const svg = { width: size, height: size, 'aria-hidden': true, fill: 'none' };
   if (name === 'info') {
     return h('svg', { ...svg, viewBox: '31 26 10 10' },

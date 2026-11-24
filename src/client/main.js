@@ -1,15 +1,24 @@
+import { HiddenPreviewTabs } from '../ui/preview-pin.js';
+import { PreviewFloatControls, PreviewFloatDock } from '../ui/preview-float-dock.js';
+import { createPreviewFloatDock } from './preview-float-dock.js';
+import { Preview, PreviewBoundary } from '../ui/preview.js';
+import { removeStackPreviews } from '../ui/preview-stack.js';
+import { loadSidebarLayout, saveSidebarLayout, savedBrowserState } from './sidebar-layout-state.js';
 import { Explorer, ExplorerTitle } from '../ui/explorer.js';
 import { ExplorerPreferences } from '../ui/preferences.js';
 import { explorerCss } from '../ui/styles.js';
 import { scrollHorizontally } from '../ui/horizontal-wheel.js';
-import { parentOf, resourceAddress, samePath, sessionFilePath, underPath, windowsPath } from '../ui/navigation.js';
+import { localPath, parentOf, pathKey, pathName, resourceAddress, samePath, sessionFilePath, underPath } from '../ui/navigation.js';
+import { localHomeLabel, supportedPlatform } from '../ui/platform.js';
 import { renameFavorites } from '../ui/favorites.js';
-import { installConversationPathDrop } from '../ui/composer-drop.js';
+import { beginPreviewTabDrag, insertPaths, sendComposerFiles, installConversationPathDrop } from '../ui/composer-drop.js';
 import { insertPreviewQuote } from '../ui/preview-quote.js';
 import { MessageQuote, quoteNodeId, quoteRule } from '../ui/quote-message.js';
 import { disks } from '../ui/workspace.js';
-import { FilePreviewTab, FilePreviewTitle, previewTabAddress, previewTabLabel } from '../ui/preview-tab.js';
-import { openNativePreview, parkPreview } from '../ui/preview-surface.js';
+import { FilePreviewTab, FilePreviewTitle, readLegacyPreviewAddress } from '../ui/preview-tab.js';
+import { isPlaybackFile, movePreview, openNativePreview } from '../ui/preview-surface.js';
+import { officeExtensions, previewTicketLifetime } from '../document-types.js';
+import { thumbnailType } from '../thumbnail-types.js';
 import { MusicCapsule } from '../ui/music-preview.js';
 import { stopMusic } from '../ui/music-player.js';
 import { installSidebarMotion } from './sidebar-motion.js';
@@ -18,7 +27,9 @@ import { installSidebarClose } from './sidebar-close.js';
 import { installSidebarFade } from './sidebar-fade.js';
 import { installSidebarTabInteractions } from './sidebar-tab-drag.js';
 import { installSidebarHeaderControls } from './sidebar-header-controls.js';
-import { createPreviewWindows, PREVIEW_WINDOW_KIND, PreviewWindowTitle } from './preview-windows.js';
+import { beginNativePreviewDockDrag, captureSidebarPlacement, restoreSidebarPlacement } from './preview-windows.js';
+import { canReturnToBrowser, collectionKey, createPreviewCollections, isCollectionAddress, newCollectionAddress, normalizePreviewFile, PREVIEW_KIND } from './preview-collections.js';
+import { installDesktopPreviewDrop } from './preview-drop.js';
 import { installMouseGestures } from './mouse-gestures.js';
 import { createPreferences } from './preferences.js';
 import { cardIconMarkup, cardIconRatio, cardIconViewBox } from '../ui/card-icon.js';
@@ -36,16 +47,17 @@ const id = 'dsh-workspace-explorer';
 // (extension)`. Our kind is ours alone, so nothing can collide, and the tree, the
 // preview and every interaction are identical either way.
 const OWN_KIND = 'dsh-workspace-explorer';
-const PREVIEW_KIND = 'dsh-workspace-explorer-preview';
 const inject = ['slots'];
 const h = react.createElement;
 const instancePrefix = 'dsh-resource://workspace-explorer/tab/';
 const computerPrefix = instancePrefix + 'computer/';
+const PREVIEW_WINDOW_KIND = 'dsh-workspace-explorer-preview-window';
 const changesReviewPrefix = 'dsh-resource://changes-review/session/';
+const idlePreviewRefreshAfter = previewTicketLifetime - 10 * 60 * 1000;
 
 function browseGroup(tabScope, sessionId, workspace) {
   if (tabScope === 'global') return 'global';
-  if (tabScope === 'workspace' && workspace) return 'workspace:' + workspace.toLowerCase();
+  if (tabScope === 'workspace' && workspace) return 'workspace:' + pathKey(workspace);
   return tabScope + ':session:' + sessionId;
 }
 
@@ -75,7 +87,7 @@ function CardIcon({ size = 26, className, computer = false }) {
 
 function apply(ctx) {
   if (location.protocol !== 'dsh-app:' || location.hostname !== 'app') return;
-  if (!navigator.platform.startsWith('Win')) return;
+  if (!supportedPlatform) return;
   const preferences = createPreferences();
   function Settings() { return h(ExplorerPreferences, { preferences }); }
   function SettingsIcon({ size = 16 }) { return icon('settings-explorer', size); }
@@ -91,13 +103,26 @@ function apply(ctx) {
     let sidebarWidth;
     const bindings = new Map();
     const folderTabs = new Map();
+    const previousDockedTabs = new Map();
+    let activeDockedPreviews = new Map();
     const inactiveGroups = new Map();
     const listeners = new Set();
-    const enlargedPreviews = new Map();
-    const previewParking = document.createElement('div');
-    previewParking.className = 'dwe dwe-preview-parking';
-    const parkSurface = surface => parkPreview(surface.host, previewParking);
-    const previewWindows = createPreviewWindows(sidebar, notify, subscribe, previewParking);
+    const previews = createPreviewCollections(sidebar, openNextToActive, notify);
+    const floatDockHost = document.createElement('div');
+    floatDockHost.className = 'dwe-preview-float-dock';
+    const floatDock = createPreviewFloatDock({
+      focus: entry => sidebar.focus(entry.tabId),
+      close: entry => sidebar.close(entry.tabId),
+      persist: previews.persistWindow,
+    });
+    let sidebarPlacement;
+    let placingPreview = false;
+    let inlinePreviewRevision = 0;
+    const parking = document.createElement('div');
+    parking.hidden = true;
+    const surfaceParking = document.createElement('div');
+    surfaceParking.className = 'dwe-parked-preview-surfaces';
+    surfaceParking.setAttribute('aria-hidden', 'true');
     let viewList = [];
     let activeView;
     let presentedSession;
@@ -110,6 +135,8 @@ function apply(ctx) {
     let projecting = false;
     let detached = false;
     let captureQueued = false;
+    let legacyMigrationQueued = false;
+    let saveTimer;
     let handoffFrame;
     let handoffAnimation;
     const tabKind = OWN_KIND;
@@ -136,7 +163,19 @@ function apply(ctx) {
       return () => listeners.delete(listener);
     }
 
+    function saveLayout() {
+      if (projecting || detached) return;
+      saveSidebarLayout(presentedGroup, { viewList, activeView, sidebarPlacement, expanded, fileFocused });
+    }
+
+    function scheduleLayoutSave() {
+      if (projecting || detached || !presentedGroup) return;
+      clearTimeout(saveTimer);
+      saveTimer = setTimeout(saveLayout, 150);
+    }
+
     function notify() {
+      scheduleLayoutSave();
       for (const listener of listeners) listener();
     }
 
@@ -148,50 +187,26 @@ function apply(ctx) {
       return view?.saved.state?.previewOpen ?? view?.initialPreviewOpen ?? lastPreviewOpen;
     }
 
-    function createView(initialPath, initialWorkspaceRoot = null, initialPreviewOpen = viewPreviewOpen(activeView)) {
+    function createView(initialPath, initialWorkspaceRoot = null, initialPreviewOpen = viewPreviewOpen(activeView), savedAddress) {
       const host = document.createElement('div');
       host.className = 'dwe-host';
-      const address = (initialPath === null ? computerPrefix : instancePrefix) + crypto.randomUUID();
+      const address = savedAddress ?? (initialPath === null ? computerPrefix : instancePrefix) + crypto.randomUUID();
       const previewPane = document.createElement('div');
       previewPane.className = 'dwe-preview-pane-host';
       const view = { host, address, path: initialPath ?? null, initialPath, initialPreviewOpen,
         initialWorkspaceRoot, workspaceRoot: initialWorkspaceRoot, saved: {},
-        previewPane, previewSurfaces: new Map(), promotedSurfaces: new Set() };
-      view.bindPreviewSurface = surface => {
-        view.previewSurfaces.set(surface.previewKey, surface);
-        return () => {
-          view.previewSurfaces.delete(surface.previewKey);
-          const entry = [...enlargedPreviews.values()].find(item => item.surface === surface);
-          if (entry) releaseEnlargedPreview(entry);
-          surface.host.remove();
+        previewPane, save: scheduleLayoutSave };
+      view.getTarget = () => view.target;
+      view.withOrigin = file => {
+        if (file.origin) return file;
+        const local = view.saved.state?.localHistory;
+        return {
+          ...file, origin: view.address, originFolder: view.path, originWorkspace: view.workspaceRoot,
+          originOutsideFolder: local?.paths[local.index],
         };
       };
-      view.promotePreview = (key, restore, paneId = view.getTarget()?.paneId) => {
-        const surface = view.previewSurfaces.get(key);
-        const sessionId = view.getTarget()?.sessionId;
-        if (!surface || !sessionId || sidebar.mounted.getSnapshot() !== sessionId) return false;
-        const address = previewTabAddress(surface.file, surface.root);
-        if (!address) return false;
-        const entryKey = sessionId + '\n' + address;
-        if (enlargedPreviews.has(entryKey)) {
-          openPreviewTab(surface.file, surface.root, paneId, sessionId);
-          return true;
-        }
-        const entry = { view, surface, sessionId, entryKey, restore };
-        enlargedPreviews.set(entryKey, entry);
-        view.promotedSurfaces = new Set(view.promotedSurfaces).add(key);
-        parkSurface(surface);
-        openPreviewTab(surface.file, surface.root, paneId, sessionId);
-        const tab = sidebar.active();
-        if (tab?.contentId !== address) {
-          releaseEnlargedPreview(entry);
-          return false;
-        }
-        entry.tabId = tab.id;
-        notify();
-        return true;
-      };
-      view.getTarget = () => view.target ?? view.previewWindow?.target;
+      view.openPreviewFiles = (files, root, paneId, sessionId, address) =>
+        openPreviewFiles(files.map(view.withOrigin), root, paneId, sessionId, address);
       view.onPath = (path, root) => {
         if (view.path === path && view.workspaceRoot === root) return;
         view.workspaceRoot = root;
@@ -207,6 +222,24 @@ function apply(ctx) {
         }
         return () => { view.fileActions = undefined; };
       };
+      view.bindInlinePreview = preview => {
+        view.inlinePreview = preview;
+        inlinePreviewRevision++;
+        notify();
+        const returned = previews.entries().find(entry => entry.returningTo === view
+          && entry.stack.tabs.some(item => item.surface === preview.item.surface));
+        if (returned) queueMicrotask(() => {
+          if (view.inlinePreview?.item.surface !== preview.item.surface || returned.returningTo !== view) return;
+          returned.returningTo = undefined;
+          const item = returned.stack.tabs.find(item => item.surface === preview.item.surface);
+          if (item) previews.close(returned, item.id);
+        });
+        return () => {
+          view.inlinePreview = undefined;
+          inlinePreviewRevision++;
+          notify();
+        };
+      };
       return view;
     }
 
@@ -216,11 +249,25 @@ function apply(ctx) {
 
     function rememberPresentation() {
       if (projecting || detached || !presentedSession || sidebar.mounted.getSnapshot() !== presentedSession) return;
+      if (!placingPreview) settleDockedPreviews();
       const tab = sidebar.active();
-      const view = tab && (bindings.get(tab.id) ?? previewWindows.owner(presentedSession, tab.id));
+      const view = tab && bindings.get(tab.id);
       if (view) activeView = view;
       fileFocused = Boolean(view);
       expanded = sidebar.isExpanded();
+      const layout = sidebar.mountedSurface?.()?.layout;
+      if (layout && layout.nodes[layout.rootId]?.kind !== 'split') {
+        for (const entry of previews.entries()) if (entry.sessionId === presentedSession) entry.preferredPaneId = undefined;
+      }
+      for (const pane of Object.values(layout?.nodes ?? {})) {
+        const active = layout.tabs[pane.activeTabId];
+        if (pane.host === 'dock' && active && !isCollectionAddress(active.contentId)) previousDockedTabs.set(pane.id, active.id);
+      }
+      sidebarPlacement = captureSidebarPlacement(layout, id => {
+        const tab = layout.tabs[id];
+        return isCollectionAddress(tab?.contentId) ? collectionKey(tab.contentId) : bindings.get(id)?.address;
+      });
+      scheduleLayoutSave();
     }
 
     function rememberOrder(sessionId) {
@@ -248,6 +295,57 @@ function apply(ctx) {
       });
     }
 
+    function migrateLegacyPreviews() {
+      if (legacyMigrationQueued) return;
+      legacyMigrationQueued = true;
+      queueMicrotask(() => {
+        legacyMigrationQueued = false;
+        const sessionId = presentedSession;
+        if (!sessionId || sidebar.mounted.getSnapshot() !== sessionId) return;
+        const tabs = sidebar.openTabs.getSnapshot().filter(tab => tab.sessionId === sessionId);
+        const legacy = [];
+        for (const tab of tabs) {
+          if (![PREVIEW_KIND, PREVIEW_WINDOW_KIND].includes(tab.kind) || isCollectionAddress(tab.contentId)) continue;
+          const id = tab.tabId ?? tab.id;
+          const file = readLegacyPreviewAddress(tab.contentId);
+          const target = file && normalizePreviewFile({ ...file, line: tab.navigation?.params?.line }, file.root);
+          if (target) legacy.push({ id, ...target });
+          else if (tab.contentId?.startsWith('dsh-resource://workspace-explorer/preview-window/')) sidebar.closeIn?.(sessionId, id);
+        }
+        const active = sidebar.active()?.id;
+        placingPreview = true;
+        try {
+          for (const target of legacy) {
+            const entry = previews.record(presentedGroup, sessionId, newCollectionAddress());
+            if (previews.open(entry, sessionId, [target], undefined, { focus: false })) {
+              if (target.id === active) sidebar.focus(entry.tabId);
+              sidebar.closeIn?.(sessionId, target.id);
+            }
+          }
+          for (const source of previews.entries()) {
+            if (source.sessionId !== sessionId || source.stack.tabs.length < 2) continue;
+            const pane = previewPaneFor(source);
+            if (!pane) continue;
+            const activeFile = source.stack.active;
+            for (const item of source.stack.tabs.filter(tab => tab.id !== activeFile)) {
+              const destination = previews.record(presentedGroup, sessionId, newCollectionAddress());
+              const floating = pane.host === 'float';
+              if (floating) destination.window = { dockOrder: source.window?.dockOrder ?? Date.now() };
+              if (previews.open(destination, sessionId, [], pane.id, { focus: false, floating, allowEmpty: true })) {
+                previews.transfer(source, destination, item.id);
+              }
+            }
+          }
+        } finally { placingPreview = false; }
+        if (legacy.length || sidebar.active()?.id !== active) {
+          if (sidebar.mountedSurface?.()?.layout.tabs[active]) sidebar.focus(active);
+          previews.sync(presentedGroup, sessionId);
+          notify();
+          rememberPresentation();
+        }
+      });
+    }
+
     function syncTabs() {
       if (projecting || detached || !presentedSession || sidebar.mounted.getSnapshot() !== presentedSession) return;
       const tabs = filesIn(presentedSession);
@@ -272,9 +370,16 @@ function apply(ctx) {
           lastPreviewOpen = viewPreviewOpen(activeView);
           activeView = undefined;
         }
-        for (const view of removed) previewWindows.close(view);
         notify();
       }
+      if (!placingPreview) {
+        const entries = previews.entries();
+        previews.sync(presentedGroup, presentedSession);
+        if (entries !== previews.entries()) notify();
+      }
+      if (!placingPreview && (previews.entries().some(entry => entry.sessionId === presentedSession && entry.stack.tabs.length > 1)
+          || sidebar.openTabs.getSnapshot().some(tab => tab.sessionId === presentedSession
+            && [PREVIEW_KIND, PREVIEW_WINDOW_KIND].includes(tab.kind) && !isCollectionAddress(tab.contentId)))) migrateLegacyPreviews();
       rememberPresentation();
     }
 
@@ -289,8 +394,14 @@ function apply(ctx) {
       }
       if (detached) return;
       captureDepartingViews();
+      saveLayout();
       detached = true;
-      previewWindows.leave(presentedSession);
+      floatDock.clearShortcutFlights();
+      for (const entry of previews.entries()) {
+        if (entry.sessionId !== presentedSession) continue;
+        const id = previews.unbind(entry);
+        if (id) sidebar.closeIn?.(presentedSession, id);
+      }
       if (expanded && viewList.length) beginHandoff();
       // The old native store is still adopted before React commits the session change.
       for (const tab of filesIn(presentedSession)) sidebar.closeIn?.(presentedSession, tab.tabId);
@@ -351,50 +462,64 @@ function apply(ctx) {
       if (tab?.kind === tabKind && tab.contentId === view.address) bindings.set(tab.id, view);
     }
 
-    function getOrCreateWorkspaceView() {
-      if (!fileFocused || !activeView?.workspaceRoot || !workspace) return;
-      if (samePath(activeView.workspaceRoot, workspace)) return activeView;
-      const existing = viewList.find(view => samePath(view.workspaceRoot, workspace));
-      if (existing) return existing;
-      const view = createView(workspace, workspace);
-      const index = viewList.indexOf(activeView) + 1;
-      viewList = [...viewList.slice(0, index), view, ...viewList.slice(index)];
-      return view;
+    function restoreGroup(group) {
+      const state = loadSidebarLayout(group);
+      if (!state) return;
+      const restored = state.views.filter(spec => typeof spec.address === 'string' && spec.address.startsWith(instancePrefix)).map(spec => {
+        const { path, root, preview } = savedBrowserState(spec);
+        const view = createView(path, root, spec.previewOpen !== false, spec.address);
+        view.saved.state = { previewOpen: view.initialPreviewOpen, previewStack: preview };
+        view.saved.checkPath = Boolean(path);
+        return view;
+      });
+      return { viewList: restored, activeView: restored.find(view => view.address === state.active),
+        sidebarPlacement: state.placement, expanded: state.expanded, fileFocused: state.fileFocused };
     }
 
     function present(sessionId, cwd, tabScope = preferences.get().tabScope) {
-      const nextWorkspace = windowsPath(cwd) ?? undefined;
+      const nextWorkspace = localPath(cwd) ?? undefined;
       const group = browseGroup(tabScope, sessionId, nextWorkspace);
       const first = !presentedSession;
       const groupChanged = !first && group !== presentedGroup;
-      if (groupChanged) {
-        if (!detached) captureDepartingViews();
-        const previous = { viewList, activeView };
-        const saved = inactiveGroups.get(group);
+      const savedGroup = (first || groupChanged) && (inactiveGroups.get(group) ?? restoreGroup(group));
+      if (first ? savedGroup : groupChanged) {
+        if (!first && !detached) {
+          captureDepartingViews();
+          saveLayout();
+        }
+        const previous = { viewList, activeView, sidebarPlacement, expanded, fileFocused };
+        const saved = savedGroup;
         const pendingWorkspace = tabScope === 'workspace' && sessionId === presentedSession
           && presentedGroup === browseGroup(tabScope, sessionId);
-        if (!pendingWorkspace || saved) inactiveGroups.set(presentedGroup, previous);
+        if (!first && (!pendingWorkspace || saved)) inactiveGroups.set(presentedGroup, previous);
         inactiveGroups.delete(group);
         const target = saved ?? (pendingWorkspace ? previous : undefined);
         const firstView = !target && tabScope !== 'global' && nextWorkspace && viewList.length
           ? createView(nextWorkspace, activeView?.workspaceRoot ? nextWorkspace : null) : undefined;
         viewList = target?.viewList ?? (firstView ? [firstView] : []);
         activeView = target?.activeView ?? firstView;
+        sidebarPlacement = target?.sidebarPlacement;
+        expanded = target?.expanded ?? expanded;
+        fileFocused = target?.fileFocused ?? Boolean(firstView);
       }
       presentedGroup = group;
       workspace = nextWorkspace;
+      for (const view of viewList) view.lastWorkspace = cwd;
       if (first || sessionId !== presentedSession || detached || groupChanged) {
         presentedSession = sessionId;
         detached = false;
         bindings.clear();
-        if (first) {
+        previousDockedTabs.clear();
+        activeDockedPreviews.clear();
+        if (first && !savedGroup) {
           syncTabs();
         } else {
-          if (tabScope === 'global') activeView = getOrCreateWorkspaceView() ?? activeView;
           const nativeActive = sidebar.active();
           const preserveExpansion = expanded;
           projecting = true;
           try {
+            for (const entry of previews.entries()) if (entry.sessionId === sessionId) previews.unbind(entry);
+            for (const tab of previews.find(sessionId)) sidebar.close(tab.tabId ?? tab.id);
             for (const tab of filesIn(sessionId)) sidebar.close(tab.tabId);
             const replaceTab = fileFocused && sidebar.active()?.kind === 'guide' ? sidebar.active()?.id : undefined;
             viewList.forEach((view, index) => placeView(view, index === 0 ? { replaceTab } : undefined));
@@ -403,39 +528,30 @@ function apply(ctx) {
                 : [...bindings].find(([, view]) => view === activeView)?.[0];
               if (restoreTab) sidebar.focus(restoreTab);
             }
-            if ((viewList.length || groupChanged) && preserveExpansion !== undefined
+            if (sidebarPlacement) {
+              const keys = [...sidebarPlacement.panes, ...sidebarPlacement.floats].flatMap(pane => pane.tabs);
+              const floatingKeys = new Set(sidebarPlacement.floats.flatMap(pane => pane.tabs));
+              for (const key of keys) {
+                if (!isCollectionAddress(key)) continue;
+                const entry = previews.record(group, sessionId, key);
+                if (entry.needsOpen && floatingKeys.has(key)) {
+                  entry.window = { ...entry.window, dockOrder: entry.window?.dockOrder ?? Date.now() };
+                }
+                previews.open(entry, sessionId, [], undefined, { focus: false, allowEmpty: true });
+              }
+            }
+            restoreSidebarPlacement(sidebar, sessionId, sidebarPlacement, key => isCollectionAddress(key)
+              ? previews.record(group, sessionId, key).tabId : [...bindings].find(([, view]) => view.address === key)?.[0],
+              key => !isCollectionAddress(key) || !previews.record(group, sessionId, key).needsOpen);
+            if ((viewList.length || sidebarPlacement?.hasPreview || groupChanged) && preserveExpansion !== undefined
                 && sidebar.isExpanded() !== preserveExpansion) sidebar.toggleExpanded();
           } finally {
             projecting = false;
           }
           notify();
-          rememberPresentation();
+          syncTabs();
         }
-        const layout = sidebar.mountedSurface?.()?.layout;
-        if (layout) {
-          for (const [tabId, view] of bindings) {
-            if (!view.previewWindow) continue;
-            const pane = Object.values(layout.nodes).find(node => node.tabs?.includes(tabId));
-            if (pane) view.previewWindow.target = { sessionId, tabId, paneId: pane.id, isFloating: pane.host === 'float' };
-          }
-        }
-        previewWindows.present(sessionId, viewList);
-      } else if (tabScope === 'global') {
-        // A newly mounted session's cwd can arrive after its sidebar is available.
-        const view = getOrCreateWorkspaceView();
-        if (!view || view === activeView) return;
-        const preserveExpansion = expanded;
-        const tabId = [...bindings].find(([, item]) => item === view)?.[0];
-        projecting = true;
-        try {
-          if (tabId) sidebar.focus(tabId);
-          else placeView(view, undefined, true);
-          if (preserveExpansion !== undefined && sidebar.isExpanded() !== preserveExpansion) sidebar.toggleExpanded();
-        } finally {
-          projecting = false;
-        }
-        notify();
-        rememberPresentation();
+        sidebarWidth?.initialize();
       }
     }
 
@@ -445,7 +561,11 @@ function apply(ctx) {
     };
 
     function openDocument(address, options) {
-      sidebar.openResource(address, { ...options, kind: 'text' });
+      sidebar.openResource(address, { ...options, paneId: dockedPane(options?.paneId), kind: 'text' });
+    }
+
+    function dockedPane(paneId) {
+      return sidebar.mountedSurface?.()?.layout?.nodes[paneId]?.host === 'float' ? undefined : paneId;
     }
 
     function openFolderTab(path, paneId) {
@@ -462,42 +582,310 @@ function apply(ctx) {
       }
     }
 
-    function openPreviewTab(file, root, paneId, sessionId) {
-      if (!sessionId || sidebar.mounted.getSnapshot() !== sessionId) return false;
-      const address = previewTabAddress(file, root);
-      if (!address) return false;
-      openNextToActive(address, { kind: PREVIEW_KIND, paneId, params: file.line ? { line: file.line } : undefined });
+    function previewPaneFor(entry) {
+      const layout = sidebar.mountedSurface?.()?.layout;
+      return Object.values(layout?.nodes ?? {}).find(pane => pane.tabs?.includes(entry.tabId));
+    }
+
+    function settleDockedPreviews() {
+      const layout = sidebar.mountedSurface()?.layout;
+      if (!layout) return;
+      const previous = activeDockedPreviews;
+      activeDockedPreviews = new Map();
+      for (const pane of Object.values(layout.nodes)) {
+        if (pane.host === 'dock' && isCollectionAddress(layout.tabs[pane.activeTabId]?.contentId)) {
+          activeDockedPreviews.set(pane.id, pane.activeTabId);
+        }
+      }
+      for (const [paneId, active] of activeDockedPreviews) {
+        const pane = sidebar.mountedSurface()?.layout?.nodes[paneId];
+        if (!pane || pane.activeTabId !== active) continue;
+        const departed = previous.get(paneId);
+        const entry = previews.entries().find(item => item.tabId === active && item.sessionId === presentedSession);
+        if ((!departed || pane.tabs.includes(departed)) && !entry?.needsOpen) continue;
+        const focused = sidebar.active()?.id;
+        hideSidebarPreview(pane);
+        if (focused && !pane.tabs.includes(focused)) sidebar.focus(focused);
+      }
+    }
+
+    function hideSidebarPreview(pane) {
+      const layout = sidebar.mountedSurface()?.layout;
+      const current = layout?.nodes[pane.id];
+      if (!current || current.activeTabId !== pane.activeTabId) return;
+      const previous = previousDockedTabs.get(pane.id);
+      const target = current.tabs.includes(previous) ? previous
+        : current.tabs.findLast(id => !isCollectionAddress(layout.tabs[id]?.contentId));
+      if (target) sidebar.focus(target);
+      else sidebar.openTab('guide', { paneId: pane.id });
+    }
+
+    function shortcutPresentation(entry) {
+      if (detached || projecting || !entry.sessionId || entry.sessionId !== sidebar.mounted.getSnapshot()) return;
+      const pane = previewPaneFor(entry);
+      if (!pane) return;
+      const floating = pane.host === 'float';
+      const displayed = !entry.needsOpen && !entry.stack.suspended && entry.stack.tabs.length > 0 && (floating
+        ? entry.window?.dockOrder === undefined : sidebar.isExpanded() && pane.activeTabId === entry.tabId);
+      return { floating, displayed };
+    }
+
+    function minimizeDockedPreview(entry) {
+      const pane = previewPaneFor(entry);
+      if (pane?.host !== 'dock' || pane.activeTabId !== entry.tabId) return;
+      floatDock.retractPreviewToShortcut(entry);
+      hideSidebarPreview(pane);
+    }
+
+    function togglePreview(entry, shortcutSource) {
+      const current = shortcutPresentation(entry);
+      if (!current) return;
+      if (current.displayed) {
+        if (current.floating) floatDock.minimize(entry);
+        else minimizeDockedPreview(entry);
+      } else activatePreview(entry, shortcutSource);
+    }
+
+    function activatePreview(entry, shortcutSource) {
+      if (entry.sessionId !== sidebar.mounted.getSnapshot()) return;
+      renewAgedPreview(entry);
+      if (entry.needsOpen || entry.stack.suspended) previews.select(entry, entry.stack.active);
+      const pane = previewPaneFor(entry);
+      if (pane?.host === 'float' && entry.window?.dockOrder !== undefined) {
+        if (entry.window.minimizedFromInline) {
+          if (preferences.get().fileDoubleClick === 'preview') {
+            floatDock.restore(entry, { maximized: false, restoreToInline: false, minimizedFromInline: false });
+          } else {
+            floatDock.flyShortcut(entry, shortcutSource, 'sidebar');
+            if (!movePreviewEntry(entry, false)) floatDock.cancelShortcutFlight(entry);
+          }
+          return;
+        }
+        floatDock.restore(entry);
+        return;
+      }
+      const scroller = pane?.host === 'dock' && '[data-sidebar-right-panel] [data-dockkit-strip="' + CSS.escape(pane.id)
+        + '"] [data-dockkit-strip-tabs]';
+      const left = scroller && document.querySelector(scroller)?.scrollLeft;
+      if (pane?.host === 'dock') floatDock.flyShortcut(entry, shortcutSource, 'sidebar');
+      sidebar.focus(entry.tabId);
+      if (pane?.host === 'dock' && !sidebar.isExpanded()) sidebar.toggleExpanded();
+      if (left) {
+        requestAnimationFrame(() => {
+          const current = document.querySelector(scroller);
+          if (current && previewPaneFor(entry)?.activeTabId === entry.tabId) current.scrollLeft = left;
+        });
+      }
+    }
+
+    function movePreviewEntry(entry, floating, paneId, focus = true) {
+      const sessionId = sidebar.mounted.getSnapshot();
+      if (!sessionId || entry.sessionId !== sessionId || presentedSession !== sessionId || !entry.stack.tabs.length) return false;
+      const pane = previewPaneFor(entry);
+      if (!pane) return false;
+      if ((pane.host === 'float') !== floating) {
+        const layout = sidebar.mountedSurface()?.layout;
+        const actions = sidebar.actionsFor?.(sessionId);
+        if (floating) {
+          entry.preferredPaneId = layout.nodes[layout.rootId]?.kind === 'split' ? pane.id : undefined;
+          if (pane.activeTabId === entry.tabId && pane.tabs.length === 1) hideSidebarPreview(pane);
+          actions?.floatTab?.(sessionId, entry.tabId);
+        } else {
+          const target = [paneId, entry.preferredPaneId, layout.activePaneId]
+            .map(id => layout.nodes[id]).find(node => node?.host === 'dock')
+            ?? Object.values(layout.nodes).find(node => node.host === 'dock');
+          if (target) actions?.dropTab?.(sessionId, entry.tabId, target.id, 'center');
+        }
+        if (previewPaneFor(entry)?.host !== (floating ? 'float' : 'dock')) return false;
+        if (floating) rememberPresentation();
+        if (!floating && entry.window) {
+          entry.window = { ...entry.window, dockOrder: undefined, maximized: false,
+            restoreToSidebar: false, restoreToInline: false, minimizedFromInline: false };
+          previews.persistWindow(entry);
+        }
+      }
+      if (focus) activatePreview(entry);
       return true;
     }
 
-    function releaseEnlargedPreview(entry) {
-      if (enlargedPreviews.get(entry.entryKey) !== entry) return;
-      enlargedPreviews.delete(entry.entryKey);
-      const { view, surface } = entry;
-      view.promotedSurfaces = new Set(view.promotedSurfaces);
-      view.promotedSurfaces.delete(surface.previewKey);
-      notify();
+    function maximizeDockedPreview(entry) {
+      if (previewPaneFor(entry)?.host !== 'dock') return false;
+      const previous = entry.window;
+      entry.window = { ...previous, maximized: true, restoreToSidebar: true, restoreToInline: false };
+      if (movePreviewEntry(entry, true)) {
+        previews.persistWindow(entry);
+        return true;
+      }
+      entry.window = previous;
+      return false;
     }
 
-    function syncEnlargedPreviews() {
-      const tabs = sidebar.openTabs.getSnapshot();
-      for (const entry of enlargedPreviews.values()) {
-        if (entry.tabId && !tabs.some(tab => tab.sessionId === entry.sessionId && tab.tabId === entry.tabId)) {
-          releaseEnlargedPreview(entry);
+    function openSmallPreview(entry) {
+      if (!movePreviewEntry(entry, true, undefined, false)) return false;
+      if (entry.window?.dockOrder !== undefined) {
+        floatDock.restore(entry, { maximized: false, restoreToSidebar: false, restoreToInline: false, minimizedFromInline: false });
+      } else {
+        if (entry.window?.maximized) floatDock.maximize(entry, false);
+        activatePreview(entry);
+      }
+      return true;
+    }
+
+    function findPreviewFile(sessionId, file) {
+      const absolute = localPath(file.absolute);
+      if (!absolute) return;
+      return previews.entries().find(entry => entry.sessionId === sessionId
+        && entry.stack.tabs.some(item => samePath(localPath(item.file.absolute), absolute)));
+    }
+
+    function inlineMediaOwners(file, except) {
+      const absolute = localPath(file.absolute);
+      if (!absolute || !isPlaybackFile(file.name)) return [];
+      return viewList.flatMap(view => {
+        if (view === except) return [];
+        const item = view.inlinePreview?.item ?? view.saved.state?.previewStack?.tabs[0];
+        return samePath(localPath(item?.file.absolute), absolute) ? [{ view, item }] : [];
+      });
+    }
+
+    function clearInlineMedia(owners) {
+      for (const { view, item } of owners) {
+        if (view.fileActions) view.fileActions.clearPreviewFile(item.file.absolute);
+        else if (view.saved.state?.previewStack) {
+          const state = view.saved.state;
+          const previewStack = removeStackPreviews(state.previewStack, tab => tab.id === item.id, view.workspaceRoot);
+          view.saved.state = { ...state, previewStack };
         }
       }
+    }
+
+    function claimInlineMedia(view, file) {
+      const entry = findPreviewFile(view.target?.sessionId ?? presentedSession, file);
+      if (entry && entry.returningTo !== view) return false;
+      const owners = inlineMediaOwners(file, view);
+      const surface = owners.find(owner => owner.item.surface)?.item.surface;
+      clearInlineMedia(owners);
+      return surface;
+    }
+
+    function openPreviewTargets(targets, sessionId, paneId, address) {
+      if (!targets.length || !sessionId || sessionId !== presentedSession || sidebar.mounted.getSnapshot() !== sessionId) return false;
+      const hit = address && previews.entries().find(entry => entry.sessionId === sessionId && entry.address === collectionKey(address));
+      if (address && !hit) return false;
+      const floating = Boolean(hit && previewPaneFor(hit)?.host === 'float');
+      let activated;
+      placingPreview = true;
+      try {
+        for (const target of targets) {
+          const owners = inlineMediaOwners(target.file);
+          const surface = owners.find(owner => owner.item.surface)?.item.surface;
+          const next = surface ? { ...target, surface } : target;
+          const existing = findPreviewFile(sessionId, target.file);
+          const targetPane = dockedPane(paneId);
+          if (existing && !movePreviewEntry(existing, floating, targetPane, false)) continue;
+          const entry = existing ?? (floating && !hit.stack.tabs.length
+            ? hit : previews.record(presentedGroup, sessionId, newCollectionAddress()));
+          if (previews.open(entry, sessionId, [next], targetPane, { floating, focus: false })) {
+            activated = entry;
+            clearInlineMedia(owners);
+          }
+        }
+        if (activated && hit?.keepEmptyFloat && hit !== activated) sidebar.close(hit.tabId);
+      } finally { placingPreview = false; }
+      previews.sync(presentedGroup, sessionId);
+      if (!activated) return false;
+      activatePreview(activated);
+      notify();
+      rememberPresentation();
+      return true;
+    }
+
+    function openPreviewFloat(sessionId, {
+      file, root, maximized = false, fromInline, minimized = false, paneId, shortcutSource,
+    } = {}) {
+      if (!sessionId || sessionId !== presentedSession || sidebar.mounted.getSnapshot() !== sessionId) return false;
+      const target = file && normalizePreviewFile(file, root);
+      if (file && !target) return false;
+      const owners = target ? inlineMediaOwners(target.file) : [];
+      if (owners.length) target.surface = owners.find(owner => owner.item.surface)?.item.surface;
+      const finish = opened => {
+        if (opened) clearInlineMedia(owners);
+        return opened;
+      };
+      const existing = target && findPreviewFile(sessionId, target.file);
+      if (existing) {
+        if (minimized) return false;
+        if (fromInline && maximized) {
+          if (previewPaneFor(existing)?.host === 'dock' && !movePreviewEntry(existing, true, undefined, false)) return false;
+          existing.window = { ...existing.window, maximized, restoreToSidebar: false, restoreToInline: true,
+            minimizedFromInline: false, dockOrder: undefined };
+          if (paneId) existing.preferredPaneId ??= paneId;
+          floatDock.refresh(existing);
+          previews.persistWindow(existing);
+          notify();
+          activatePreview(existing);
+          return finish(true);
+        }
+        if (maximized && previewPaneFor(existing)?.host === 'dock') return finish(maximizeDockedPreview(existing));
+        if (existing.window?.minimizedFromInline) {
+          floatDock.restore(existing, { maximized, restoreToInline: false, minimizedFromInline: false });
+        } else if (existing.window?.maximized !== maximized) floatDock.maximize(existing, maximized);
+        return finish(movePreviewEntry(existing, true));
+      }
+      const entry = previews.record(presentedGroup, sessionId, newCollectionAddress());
+      if (maximized || minimized) entry.window = { maximized, restoreToInline: fromInline && maximized,
+        minimizedFromInline: minimized, dockOrder: minimized ? Date.now() : undefined };
+      if (minimized) floatDock.flyShortcut(entry, shortcutSource, 'shortcut');
+      placingPreview = true;
+      try {
+        if (!previews.open(entry, sessionId, target ? [target] : [], undefined, {
+          floating: true, allowEmpty: !target, keepEmptyFloat: !target, focus: !minimized,
+        })) {
+          floatDock.cancelShortcutFlight(entry);
+          return false;
+        }
+      } finally { placingPreview = false; }
+      previews.sync(presentedGroup, sessionId);
+      if (fromInline) entry.preferredPaneId = paneId;
+      finish(true);
+      notify();
+      rememberPresentation();
+      return true;
+    }
+
+    function openInlinePreviewAs(view, file, root, mode, shortcutSource) {
+      const { sessionId, paneId, tabId } = view.target ?? {};
+      const layout = sidebar.mountedSurface?.()?.layout;
+      const splitPane = layout?.nodes[layout.rootId]?.kind === 'split' ? dockedPane(paneId) : undefined;
+      if (mode === 'sidebar') {
+        const target = normalizePreviewFile(view.withOrigin(file), root);
+        return target && openPreviewTargets([target], sessionId, dockedPane(paneId));
+      }
+      const minimized = mode === 'minimized';
+      const opened = openPreviewFloat(sessionId, { file: view.withOrigin(file), root, fromInline: true,
+        paneId: splitPane, maximized: mode === 'maximized', minimized, shortcutSource });
+      if (opened && minimized) sidebar.focus(tabId);
+      return opened;
+    }
+
+    function openPreviewFiles(files, root, paneId, sessionId, address) {
+      return openPreviewTargets(files.map(file => normalizePreviewFile(file, root)).filter(Boolean), sessionId, paneId, address);
+    }
+
+    function openPreviewTab(file, root, paneId, sessionId, address) {
+      return openPreviewFiles([file], root, paneId, sessionId, address);
     }
 
     async function statFile(sessionId, file, signal) {
       try {
         const result = await scope.remote.workspaceFiles.stat(sessionId, file, signal);
-        const absolute = windowsPath(result.ok && result.value.absolutePath);
-        if (absolute) return { absolute, name: absolute.split('\\').at(-1), size: result.value.bytes };
+        const absolute = localPath(result.ok && result.value.absolutePath);
+        if (absolute) return { absolute, name: pathName(absolute), size: result.value.bytes };
       } catch { /* The built-in preview can report a failed session file lookup. */ }
     }
 
-    function revealFile(view, file, line) {
-      const preview = [file.absolute, file.name, file.size, line];
+    function revealFile(view, file, line, surface) {
+      const preview = [file.absolute, file.name, file.size, line, surface];
       if (view.fileActions) view.fileActions.reveal(...preview);
       else view.pendingPreview = preview;
     }
@@ -510,7 +898,7 @@ function apply(ctx) {
 
     function currentExplorer() {
       const tabId = sidebar.active()?.id;
-      return bindings.get(tabId) ?? previewWindows.owner(presentedSession, tabId) ?? activeView ?? viewList[0];
+      return bindings.get(tabId) ?? activeView ?? viewList[0];
     }
 
     function revealInExplorer(file, origin) {
@@ -526,6 +914,41 @@ function apply(ctx) {
       if (!target) return false;
       revealFile(target, file, file.line);
       return true;
+    }
+
+    function restoreMusicPreview(file, surface) {
+      const entry = findPreviewFile(sidebar.mounted.getSnapshot(), file);
+      if (entry) {
+        activatePreview(entry);
+        return true;
+      }
+      const owner = inlineMediaOwners(file).find(({ item }) => item.surface === surface);
+      return revealInExplorer(file, owner?.view);
+    }
+
+    function returnPreviewToBrowser(entry, forceNew = false) {
+      const item = entry.stack.tabs.find(tab => tab.id === entry.stack.active);
+      if (!item || !entry.target) return;
+      const { file } = item;
+      const { sessionId, paneId } = entry.target;
+      const source = !forceNew && [...bindings].find(([, view]) => file.origin && canReturnToBrowser(file, view));
+      let view;
+      if (source && filesIn(sessionId).some(tab => tab.tabId === source[0])) {
+        view = source[1];
+        sidebar.focus(source[0]);
+        if (!sidebar.isExpanded() && !view.target?.isFloating) sidebar.toggleExpanded();
+      } else view = openFolderTab(parentOf(file.absolute), dockedPane(paneId));
+      if (!view) return;
+      const inlineItem = view.inlinePreview?.item;
+      if (viewPreviewOpen(view) && samePath(inlineItem?.file.absolute, file.absolute)
+          && (!isPlaybackFile(file.name) || inlineItem.surface === item.surface)) {
+        previews.close(entry, item.id);
+        return;
+      }
+      // Retain the standalone render until the receiving explorer has attached the same surface.
+      entry.returningTo = view;
+      revealFile(view, file, file.line, item.surface);
+      if (!item.surface) previews.close(entry, item.id);
     }
 
     function showConversationFile(file, sessionId) {
@@ -547,32 +970,191 @@ function apply(ctx) {
       }
     }
 
-    function MediaFilePreviewTab(props) {
-      const { tab, panel } = props.useTabInfo();
+    async function validateRestoredFiles(entry, target, signal) {
+      const original = entry.stack.tabs;
+      const results = await Promise.all(original.map(async tab => {
+        try {
+          const found = await disks.locate(tab.file.absolute, signal, tab.root);
+          return found.type !== 'file' ? tab : undefined;
+        } catch (error) { return error.status === 404 ? tab : undefined; }
+      }));
+      if (signal.aborted || entry.target !== target) return;
+      entry.checkFiles = false;
+      const missing = new Set(results.filter(tab => tab && entry.stack.tabs.includes(tab)).map(tab => tab.id));
+      previews.remove(entry, missing);
+    }
+
+    function StandalonePreview({ sessionId, useTabInfo }) {
+      const { tab, panel } = useTabInfo();
+      const address = tab.navigation.address;
+      const host = react.useRef(null);
+      const entry = react.useSyncExternalStore(subscribe, () => sessionId === presentedSession && isCollectionAddress(address)
+        ? previews.entries().find(item => item.group === presentedGroup && item.address === collectionKey(address)) : null);
       react.useLayoutEffect(() => {
-        if (tab.visible && !panel?.isFloating) sidebarWidth?.initialize();
-      }, [tab.visible, panel?.isFloating]);
-      const entry = react.useSyncExternalStore(subscribe,
-        () => enlargedPreviews.get(props.sessionId + '\n' + tab.navigation.address));
-      return h(FilePreviewTab, {
-        ...props, surface: entry?.surface, parkPreview: parkSurface, restoreMusicPreview: revealInExplorer, sendQuote, preferences,
-        onOpenNative: (file, root) => openNativePreview(file, root, { sessionId: props.sessionId, paneId: panel?.id },
-          () => sidebar.mounted.getSnapshot() === props.sessionId && sidebar.openTabs.getSnapshot().some(item =>
-            item.sessionId === props.sessionId && (item.tabId ?? item.id) === tab.id && item.contentId === tab.navigation.address), openDocument),
-        onExit: file => {
-          if (!entry) revealInExplorer(file);
-          else {
-            parkSurface(entry.surface);
-            const origin = filesIn(entry.sessionId).find(item => bindings.get(item.tabId) === entry.view);
-            if (origin) {
-              entry.restore();
-              sidebar.focus(origin.tabId);
-            } else revealInExplorer(file);
-            releaseEnlargedPreview(entry);
-          }
-          tab.actions.close();
-        },
+        if (!tab.visible || !entry) return;
+        entry.host ??= document.createElement('div');
+        entry.host.className = 'dwe-host';
+        const destination = host.current;
+        const target = { sessionId, address, paneId: panel.id, floating: panel.isFloating, tabId: tab.id };
+        entry.target = target;
+        movePreview(entry.host, destination);
+        const float = target.floating ? destination.closest('[data-dockkit-float]') : null;
+        const header = float?.querySelector('[data-dockkit-float-grip]');
+        let disconnectFloat;
+        let controls;
+        function blockMaximizedDrag(event) {
+          if (float.hasAttribute('data-dwe-float-maximized')
+              && !event.target.closest?.('button')) event.stopPropagation();
+        }
+        if (header) {
+          controls = document.createElement('div');
+          controls.className = 'dwe-preview-float-controls';
+          controls.dataset.windowDragExclude = '';
+          header.insertBefore(controls, header.querySelector(':scope > [data-dockkit-float-close]'));
+          header.addEventListener('pointerdown', blockMaximizedDrag);
+          entry.floatControls = controls;
+          entry.floatTitle = header.querySelector('[data-dockkit-float-title]');
+          if (entry.needsOpen) entry.window = { ...entry.window, dockOrder: entry.window?.dockOrder ?? Date.now() };
+          disconnectFloat = floatDock.connect(entry, float);
+        }
+        if (!target.floating) sidebarWidth?.initialize();
+        notify();
+        capturePresentation(sessionId);
+        return () => {
+          disconnectFloat?.();
+          header?.removeEventListener('pointerdown', blockMaximizedDrag);
+          controls?.remove();
+          if (header?.contains(entry.floatTitle)) entry.floatTitle = undefined;
+          if (entry.host.parentNode === destination && parking.isConnected) movePreview(entry.host, parking);
+          if (entry.target === target) entry.target = undefined;
+          notify();
+          capturePresentation(sessionId);
+        };
+      }, [tab.visible, tab.id, address, panel.id, panel.isFloating, sessionId, entry]);
+      return h('div', { ref: host, className: 'dwe-host' });
+    }
+
+    function surfaceFor(item) {
+      if (!item.surface) {
+        const host = document.createElement('div');
+        host.className = 'dwe-preview-surface';
+        item.surface = { host, key: crypto.randomUUID(), openedAt: Date.now(),
+          pdfPosition: item.pdfPosition ?? (/\.pdf$/i.test(item.file.name) ? {} : undefined) };
+      }
+      return item.surface;
+    }
+
+    function standaloneSurfaceFor(entry, item) {
+      return item.surface ?? (entry.needsOpen || entry.window?.minimizedFromInline ? undefined : surfaceFor(item));
+    }
+
+    function renewAgedPreview(entry, now = Date.now()) {
+      previews.renewSurface(entry, ({ file, surface }) => {
+        if (!surface || now - surface.openedAt < idlePreviewRefreshAfter) return false;
+        const extension = file.name.split('.').at(-1).toLowerCase();
+        return extension === 'pdf' || officeExtensions.has(extension) || thumbnailType(file.name)?.startsWith('image/');
       });
+    }
+
+    function parkSurface(surface) {
+      const { width, height } = surface.host.getBoundingClientRect();
+      if (width && height) {
+        surface.host.style.setProperty('--dwe-parked-width', width + 'px');
+        surface.host.style.setProperty('--dwe-parked-height', height + 'px');
+      }
+      movePreview(surface.host, surfaceParking);
+    }
+
+    function PreviewSurfaces({ views }) {
+      react.useSyncExternalStore(subscribe, () => inlinePreviewRevision);
+      react.useSyncExternalStore(subscribe, previews.revision);
+      const entries = react.useSyncExternalStore(subscribe, previews.entries);
+      const surfaces = new Map();
+      for (const entry of entries) {
+        for (const item of entry.stack.tabs) {
+          if (item.surface || (!entry.stack.suspended && item.id === entry.stack.active)) {
+            const surface = standaloneSurfaceFor(entry, item);
+            if (surface) surfaces.set(surface, { entry, item });
+          }
+        }
+      }
+      for (const view of views) {
+        const inline = view.inlinePreview;
+        if (!inline) continue;
+        const surface = inline.item.surface;
+        if (!surfaces.has(surface) || surfaces.get(surface).entry?.returningTo === view) {
+          surfaces.set(surface, { item: inline.item, inline });
+        }
+      }
+      return [...surfaces].map(([surface, props]) => h(PreviewSurface, { ...props, key: surface.key, surface }));
+    }
+
+    function PreviewSurface({ surface, item, inline }) {
+      react.useLayoutEffect(() => () => surface.host.remove(), [surface]);
+      const mediaSource = react.useRef();
+      const { file } = item;
+      const root = inline ? inline.root : item.root;
+      const media = isPlaybackFile(file.name);
+      const key = media ? pathKey(localPath(file.absolute)) ?? file.absolute : file.absolute;
+      // Moving to a different preview can change its scope without changing the open media.
+      if (media && mediaSource.current?.key !== key) mediaSource.current = { key, file, root };
+      const source = media ? mediaSource.current : { file, root };
+      return reactDom.createPortal(h(PreviewBoundary, { key, standalone: !inline },
+        h(Preview, {
+          file: source.file, root: source.root, openImmediately: !inline, confirmed: !inline || item.confirmed, sendQuote, pdfPosition: surface.pdfPosition,
+          onConfirm: inline?.onConfirm,
+          onRestore: () => restoreMusicPreview(file, surface),
+        })), surface.host);
+    }
+
+    function PreviewTitle({ sessionId, useTabInfo }) {
+      const { tab } = useTabInfo();
+      const file = react.useSyncExternalStore(subscribe, () => previews.entries().find(entry =>
+        entry.sessionId === sessionId && entry.tabId === tab.id)?.stack.tabs[0]?.file);
+      return h(FilePreviewTitle, { file });
+    }
+
+    function PreviewPresentation({ entry }) {
+      const stack = react.useSyncExternalStore(subscribe, () => entry.stack);
+      const target = react.useSyncExternalStore(subscribe, () => entry.target);
+      const needsOpen = react.useSyncExternalStore(subscribe, () => Boolean(entry.needsOpen));
+      const labelInFlight = react.useSyncExternalStore(floatDock.subscribe, () => floatDock.shortcutFlightState(entry) === 'sidebar');
+      react.useEffect(() => {
+        if (!target || needsOpen || !entry.checkFiles) return;
+        const controller = new AbortController();
+        void validateRestoredFiles(entry, target, controller.signal);
+        return () => controller.abort();
+      }, [entry, target, needsOpen]);
+      if (!entry.host) return null;
+      const { sessionId, paneId, floating, address } = target ?? {};
+      const returnInline = forceNew => returnPreviewToBrowser(entry, forceNew);
+      const openFloat = () => openSmallPreview(entry);
+      return h(react.Fragment, null, floating && h(PreviewFloatControls, { dock: floatDock, entry,
+        dockFile: () => movePreviewEntry(entry, false), openFloat, returnInline }),
+        reactDom.createPortal(h(FilePreviewTab, {
+        sessionId, address, paneId, visible: Boolean(target), floating, floatTitle: entry.floatTitle,
+        stack, preferences, openLocal, parkSurface, labelInFlight,
+        surfaceFor: item => standaloneSurfaceFor(entry, item), openFloat, returnInline,
+        minimizeSidebar: () => minimizeDockedPreview(entry),
+        maximizeSidebar: () => maximizeDockedPreview(entry),
+        closeSidebar: () => sidebar.close(entry.tabId),
+        renamed: updateRenamedPath,
+        send: (items, mode, root) => sendComposerFiles(sessionId, getInput, items, mode, root),
+        startPreviewDrag: (source, file, pointer) => {
+          const dock = beginNativePreviewDockDrag(source, entry.tabId, pointer);
+          const reference = beginPreviewTabDrag(sessionId,
+            () => insertPaths(getInput(sessionId), [{ path: file.absolute, name: file.name }]));
+          return {
+            move: reference.move,
+            finish(x, y) {
+              if (dock?.finish(x, y)) reference.cancel();
+              else reference.finish(x, y);
+            },
+            cancel() { dock?.cancel(); reference.cancel(); },
+          };
+        },
+        openNative: (file, root) => openNativePreview(file, root, target, () => entry.target === target, openDocument),
+      }), entry.host));
     }
 
     function isVisibleExplorer(view) {
@@ -602,7 +1184,7 @@ function apply(ctx) {
       if (bounds && bounds.width >= 112 && bounds.height >= 112) return bounds;
     }
 
-    async function openConversationFile(request, signal, onUnavailable) {
+    async function openConversationFile(request, signal, onUnavailable, destination) {
       const { address, sessionId, file, params } = request;
       const metadata = await statFile(sessionId, file, signal);
       if (signal.aborted || sidebar.mounted.getSnapshot() !== sessionId) return;
@@ -611,18 +1193,26 @@ function apply(ctx) {
         else openDocument(address, { params });
         return;
       }
-      showConversationFile({ ...metadata, line: params?.line }, sessionId);
+      const preview = { ...metadata, line: params?.line };
+      if (destination) openPreviewTab(preview, null, destination.paneId, sessionId, destination.address);
+      else showConversationFile(preview, sessionId);
     }
 
     function installFileOpener() {
       const openResource = sidebar.openResource;
       let fileClick;
+      const pending = new Set();
       let dragSource;
       let openingReview = false;
-      function openFile(request, onUnavailable) {
-        fileClick?.abort();
-        fileClick = new AbortController();
-        void openConversationFile(request, fileClick.signal, onUnavailable);
+      function openFile(request, onUnavailable, destination) {
+        const controller = new AbortController();
+        if (!destination && preferences.get().conversationFileView !== 'full') {
+          fileClick?.abort();
+          fileClick = controller;
+        }
+        pending.add(controller);
+        void openConversationFile(request, controller.signal, onUnavailable, destination)
+          .finally(() => pending.delete(controller));
       }
       function open(address, options) {
         const changed = dragSource?.changed;
@@ -645,7 +1235,7 @@ function apply(ctx) {
         const description = document.getElementById(button.getAttribute('aria-describedby'));
         const sessionId = card?.closest('[data-conversation-content]')?.dataset.conversationSession;
         if (sessionId !== sidebar.mounted.getSnapshot() || !card?.contains(description)) return;
-        const absolute = windowsPath(description.textContent);
+        const absolute = localPath(description.textContent);
         if (absolute) return fileRequest(resourceAddress(absolute, sessionId));
       }
       function clickChangedFile(event) {
@@ -675,18 +1265,24 @@ function apply(ctx) {
         return capture.file ?? changed;
       }
       sidebar.openResource = open;
-      const stopDrop = installConversationDrop(sidebar.mounted, readDragSource, ({ address, sessionId, params, review }, paneId) => {
+      const stopDrop = installConversationDrop(sidebar.mounted, readDragSource, (request, paneId, previewAddress) => {
+        const { sessionId, review } = request;
         if (sidebar.mounted.getSnapshot() !== sessionId) return;
-        if (review) sidebar.openResource(review.address, { paneId, params: review.params });
-        else openDocument(address, { paneId, params });
+        if (review) sidebar.openResource(review.address, { paneId: dockedPane(paneId), params: review.params });
+        else openFile(request, () => openDocument(request.address, { paneId, params: request.params }),
+          { paneId, address: previewAddress });
       });
       document.addEventListener('click', clickChangedFile, true);
-      const stop = sidebar.mounted.subscribe(() => fileClick?.abort());
+      const cancel = () => {
+        for (const controller of pending) controller.abort();
+        pending.clear();
+      };
+      const stop = sidebar.mounted.subscribe(cancel);
       return () => {
         document.removeEventListener('click', clickChangedFile, true);
         stopDrop();
         stop();
-        fileClick?.abort();
+        cancel();
         if (sidebar.openResource === open) sidebar.openResource = openResource;
       };
     }
@@ -708,9 +1304,10 @@ function apply(ctx) {
     }
 
     function refreshDirectories(paths, moved = []) {
-      const changed = new Set(paths.map(path => path.toLowerCase()));
+      previews.removePaths(moved);
+      const changed = new Set(paths.map(pathKey));
       for (const view of viewList) {
-        if (view.path && (changed.has(view.path.toLowerCase()) || moved.some(root => underPath(view.path, root)))) {
+        if (view.path && (changed.has(pathKey(view.path)) || moved.some(root => underPath(view.path, root)))) {
           view.fileActions?.refresh();
         }
       }
@@ -719,6 +1316,7 @@ function apply(ctx) {
     function updateRenamedPath(from, to) {
       if (from === to) return;
       renameFavorites(from, to);
+      previews.rename(from, to);
       for (const view of viewList) view.fileActions?.rename(from, to);
     }
 
@@ -733,8 +1331,7 @@ function apply(ctx) {
         const target = { sessionId, paneId: panel.id, isFloating: panel.isFloating, tabId: tab.id };
         if (!panel.isFloating) sidebarWidth?.initialize();
         view.target = target;
-        if (view.previewWindow) view.previewWindow.target = target;
-        element.appendChild(view.host);
+        movePreview(view.host, element);
         const savedScroll = view.saved.scroll;
         if (savedScroll && savedScroll.path === view.path) {
           const list = view.host.querySelector('.dwe-list');
@@ -751,7 +1348,7 @@ function apply(ctx) {
           dispose?.();
           if (view.target !== target) return;
           view.target = undefined;
-          if (view.host.parentNode === element) view.host.remove();
+          if (view.host.parentNode === element && parking.isConnected) movePreview(view.host, parking);
           notify();
           capturePresentation(sessionId);
         };
@@ -796,9 +1393,7 @@ function apply(ctx) {
 
     function View({ view, cwd, followWorkspace }) {
       const target = react.useSyncExternalStore(subscribe, view.getTarget);
-      const promotedSurfaces = react.useSyncExternalStore(subscribe, () => view.promotedSurfaces);
-      const floatingPreview = react.useSyncExternalStore(subscribe, () => Boolean(view.previewWindow));
-      const sessionId = view.previewWindow?.sessionId ?? target?.sessionId;
+      const sessionId = target?.sessionId;
       const favoritesDisplay = react.useSyncExternalStore(preferences.subscribe, () => preferences.get().favoritesDisplay);
       const workspaceButtonDisplay = react.useSyncExternalStore(preferences.subscribe, () => preferences.get().workspaceButtonDisplay);
       return reactDom.createPortal(h(Explorer, {
@@ -806,12 +1401,17 @@ function apply(ctx) {
         initialPath: view.initialPath, initialWorkspaceRoot: view.initialWorkspaceRoot, initialPreviewOpen: view.initialPreviewOpen,
         favoritesDisplay, workspaceButtonDisplay, preferences,
         getTarget: view.getTarget, bindFileActions: view.bindFileActions,
-        onPath: view.onPath, openLocal, openDocument, openFolderTab, openPreviewTab, refreshDirectories, updateRenamedPath, getInput, sendQuote,
-        restoreMusicPreview: file => revealInExplorer(file, view),
-        promotedSurfaces, bindPreviewSurface: view.bindPreviewSurface, promotePreview: view.promotePreview,
-        previewPane: view.previewPane, floatingPreview,
-        detachPreview: point => previewWindows.open(view, point),
-        closeFloatingPreview: () => previewWindows.close(view),
+        onPath: view.onPath, openLocal, openDocument, openFolderTab, refreshDirectories, updateRenamedPath, getInput,
+        previewPane: view.previewPane, saveLayout: view.save,
+        surfaceFor, parkSurface, bindInlinePreview: view.bindInlinePreview,
+        subscribePreviewShortcuts: subscribe,
+        hasPreviewShortcut: file => Boolean(findPreviewFile(sessionId, file)),
+        claimInlineMedia: file => claimInlineMedia(view, file),
+        openInlinePreviewAs: (file, root, mode, source) => openInlinePreviewAs(view, file, root, mode, source),
+        openPreviewFiles: view.openPreviewFiles,
+        promotePreview: (file, root) => view.openPreviewFiles([file], root, target?.paneId, sessionId),
+        floatPreview: (file, root) => openPreviewFloat(sessionId, { file: view.withOrigin(file), root }),
+        fullscreenPreview: (file, root) => openPreviewFloat(sessionId, { file: view.withOrigin(file), root, maximized: true }),
       }), view.host);
     }
 
@@ -837,8 +1437,8 @@ function apply(ctx) {
         h('span', { className: 'dwe-guide-copy' },
           h('span', { className: 'dwe-guide-title' }, title),
           description !== undefined && h('span', { className: 'dwe-guide-description' }, description))),
-        h('button', { type: 'button', className: 'dwe-guide-computer', title: '打开此电脑',
-          'aria-label': '打开此电脑',
+        h('button', { type: 'button', className: 'dwe-guide-computer', title: '打开' + localHomeLabel,
+          'aria-label': '打开' + localHomeLabel,
           onClick: () => openFromGuide(() => sidebar.openResource(computerPrefix + crypto.randomUUID(), {
             kind: tabKind, paneId: panel.id, replaceTab: tab.id,
           })),
@@ -847,20 +1447,46 @@ function apply(ctx) {
 
     function Keeper({ useSessions }) {
       const sessionId = react.useSyncExternalStore(sidebar.mounted.subscribe, sidebar.mounted.getSnapshot);
+      react.useSyncExternalStore(sidebar.openTabs.subscribe, sidebar.openTabs.getSnapshot);
+      react.useSyncExternalStore(floatDock.subscribe, floatDock.getSnapshot);
+      react.useSyncExternalStore(subscribe, () => previews.entries().filter(entry => entry.group === presentedGroup)
+        .map(entry => {
+          const current = shortcutPresentation(entry) ?? entry.shortcut;
+          return current ? String(Number(current.floating)) + Number(current.displayed) : '';
+        }).join(','));
       const currentViews = react.useSyncExternalStore(subscribe, () => viewList);
+      const entries = react.useSyncExternalStore(subscribe, previews.entries);
       const currentGroup = react.useSyncExternalStore(subscribe, () => presentedGroup);
       const currentWorkspace = react.useSyncExternalStore(subscribe, () => workspace);
       const cwd = useSessions(state => sessionId ? state.byId[sessionId]?.cwd : undefined);
       const tabScope = react.useSyncExternalStore(preferences.subscribe, () => preferences.get().tabScope);
+      const inlineShortcutWindow = react.useSyncExternalStore(preferences.subscribe, () => preferences.get().fileDoubleClick === 'preview');
       const followsWorkspace = currentGroup !== undefined && currentGroup !== 'global';
       // A departing group must finish with its own workspace before the incoming views mount.
-      const viewCwd = sessionId === presentedSession && browseGroup(tabScope, sessionId, windowsPath(cwd)) === currentGroup
+      const viewCwd = sessionId === presentedSession && browseGroup(tabScope, sessionId, localPath(cwd)) === currentGroup
         ? cwd : currentWorkspace;
       react.useLayoutEffect(() => {
         if (sessionId && sidebar.mounted.getSnapshot() === sessionId) present(sessionId, cwd, tabScope);
       }, [sessionId, cwd, tabScope]);
+      const shortcuts = currentGroup === undefined ? [] : entries
+        .filter(entry => entry.group === currentGroup && entry.stack.tabs.length)
+        .map(entry => ({ entry, ...(shortcutPresentation(entry) ?? entry.shortcut) }));
+      react.useLayoutEffect(() => {
+        for (const { entry, floating, displayed } of shortcuts) {
+          if (floating !== undefined) entry.shortcut = { floating, displayed };
+        }
+      }, [shortcuts]);
+      const views = [...new Set([...currentViews, ...[...inactiveGroups.values()].flatMap(group => group.viewList)])];
       return h(react.Fragment, null, h(MusicCapsule, { sessionId }),
-        currentViews.map(view => h(View, { key: view.address, view, cwd: viewCwd, followWorkspace: followsWorkspace })));
+        h(PreviewFloatDock, { dock: floatDock, host: floatDockHost, shortcuts, activate: togglePreview, inlineShortcutWindow,
+          move: (entry, floating, paneId) => floating ? openSmallPreview(entry) : movePreviewEntry(entry, false, paneId),
+          openEmpty: sessionId ? () => openPreviewFloat(sessionId) : undefined }),
+        h(HiddenPreviewTabs, { tabs: previews.find(sessionId) }),
+        views.map(view =>
+          h(View, { key: view.address, view,
+            cwd: currentViews.includes(view) ? viewCwd : view.lastWorkspace,
+            followWorkspace: currentViews.includes(view) && followsWorkspace })),
+        entries.map(entry => h(PreviewPresentation, { key: entry.key, entry })), h(PreviewSurfaces, { views }));
     }
 
     scope.effect(() => {
@@ -868,7 +1494,7 @@ function apply(ctx) {
       style.dataset.dshWorkspaceExplorer = '';
       style.textContent = explorerCss;
       document.head.appendChild(style);
-      document.body.appendChild(previewParking);
+      document.body.append(parking, surfaceParking);
       function wheel(event) {
         if (!(event.target instanceof Element)) return;
         const scroller = event.target.closest('.dwe-path, .dwe-preview-tabs, .dwe-toolbar, [data-dwe-extension-area="file-footer"]');
@@ -899,12 +1525,33 @@ function apply(ctx) {
       const disposeSidebarClose = installSidebarClose(sidebar, () => projecting || detached);
       const disposeSidebarFade = installSidebarFade(sidebar);
       const disposeSidebarTabInteractions = installSidebarTabInteractions(sidebar.mounted, preferences);
-      const disposeSidebarHeaderControls = installSidebarHeaderControls(sidebar, preferences);
+      const disposeSidebarHeaderControls = installSidebarHeaderControls(sidebar, preferences, floatDockHost);
+      const disposeFloatQuickMinimize = floatDock.installQuickMinimize(() => preferences.get().quickFloatMinimize);
       const disposeExtensions = installExtensionEffects(preferences);
       const disposeTabs = sidebar.openTabs.subscribe(syncTabs);
-      const disposePreviewTabs = sidebar.openTabs.subscribe(syncEnlargedPreviews);
-      const disposePreviewWindows = sidebar.openTabs.subscribe(previewWindows.sync);
+      const disposeDesktopDrop = installDesktopPreviewDrop(sidebar.mounted, openPreviewFiles);
       const disposeSwitch = sidebar.mounted.subscribe(closeDepartingTabs);
+      const snapshotAfterResize = () => queueMicrotask(rememberPresentation);
+      let lastActivity = Date.now();
+      function refreshIdlePreviews(now = Date.now()) {
+        if (document.visibilityState === 'hidden' || now - lastActivity < idlePreviewRefreshAfter) return;
+        for (const entry of previews.entries()) {
+          if (shortcutPresentation(entry)?.displayed) renewAgedPreview(entry, now);
+        }
+      }
+      function resumePreviews() {
+        if (document.visibilityState === 'hidden') return;
+        const now = Date.now();
+        refreshIdlePreviews(now);
+        lastActivity = now;
+      }
+      const previewRefreshTimer = setInterval(refreshIdlePreviews, 60_000);
+      window.addEventListener('pointerup', snapshotAfterResize);
+      window.addEventListener('pointerdown', resumePreviews, true);
+      window.addEventListener('wheel', resumePreviews, { capture: true, passive: true });
+      window.addEventListener('focus', resumePreviews);
+      document.addEventListener('visibilitychange', resumePreviews);
+      window.addEventListener('pagehide', saveLayout);
       return () => {
         stopMusic();
         disposeFileOpener();
@@ -918,23 +1565,32 @@ function apply(ctx) {
         disposeSidebarFade();
         disposeSidebarTabInteractions();
         disposeSidebarHeaderControls();
+        disposeFloatQuickMinimize();
+        floatDock.clearShortcutFlights();
+        floatDockHost.remove();
         disposeExtensions();
         disposeTabs();
-        disposePreviewTabs();
-        disposePreviewWindows();
-        previewWindows.dispose();
-        enlargedPreviews.clear();
-        previewParking.remove();
+        disposeDesktopDrop();
+        window.removeEventListener('pointerup', snapshotAfterResize);
+        window.removeEventListener('pointerdown', resumePreviews, true);
+        window.removeEventListener('wheel', resumePreviews, true);
+        window.removeEventListener('focus', resumePreviews);
+        document.removeEventListener('visibilitychange', resumePreviews);
+        window.removeEventListener('pagehide', saveLayout);
+        clearTimeout(saveTimer);
+        clearInterval(previewRefreshTimer);
         disposeSwitch();
         detached = false;
         finishHandoff();
         document.removeEventListener('wheel', wheel, true);
+        parking.remove();
+        surfaceParking.remove();
         style.remove();
       };
     });
     scope.inject(['layout'], layoutScope => {
       layoutScope.effect(() => {
-        const width = installSidebarWidth(layoutScope.layout, document);
+        const width = installSidebarWidth(layoutScope.layout, document, preferences, () => presentedGroup);
         sidebarWidth = width;
         if (activeView?.target && !activeView.target.isFloating) width.initialize();
         return () => {
@@ -947,10 +1603,10 @@ function apply(ctx) {
       ['shell.overlay', undefined, Keeper],
       ['sidebar.right.pane.tab', id, Anchor],
       ['sidebar.right.pane.tab.title', id, Title],
-      ['sidebar.right.pane.tab', PREVIEW_KIND, MediaFilePreviewTab],
-      ['sidebar.right.pane.tab.title', PREVIEW_KIND, FilePreviewTitle],
-      ['sidebar.right.pane.tab', PREVIEW_WINDOW_KIND, previewWindows.Anchor],
-      ['sidebar.right.pane.tab.title', PREVIEW_WINDOW_KIND, PreviewWindowTitle],
+      ['sidebar.right.pane.tab', PREVIEW_KIND, StandalonePreview],
+      ['sidebar.right.pane.tab.title', PREVIEW_KIND, PreviewTitle],
+      ['sidebar.right.pane.tab', PREVIEW_WINDOW_KIND, StandalonePreview],
+      ['sidebar.right.pane.tab.title', PREVIEW_WINDOW_KIND, PreviewTitle],
       ['sidebar.right.tab.guide.entry', id, ExplorerGuide],
     ]) {
       scope.effect(() => scope.slots.inject(name, () =>
@@ -962,10 +1618,10 @@ function apply(ctx) {
     // built-in page when it steps aside), and file clicks still land on our page through
     // installFileOpener(), which patches the host's openResource whatever kind is in front.
     scope.effect(() => scope.sidebarRightTabs.register({
-      id: PREVIEW_KIND, kind: PREVIEW_KIND, priority: 'extension', title: previewTabLabel,
+      id: PREVIEW_KIND, kind: PREVIEW_KIND, priority: 'extension', multiple: true, title: () => '文件预览',
     }));
     scope.effect(() => scope.sidebarRightTabs.register({
-      id: PREVIEW_WINDOW_KIND, kind: PREVIEW_WINDOW_KIND, priority: 'extension', title: () => '预览',
+      id: PREVIEW_WINDOW_KIND, kind: PREVIEW_WINDOW_KIND, priority: 'extension', title: () => '文件预览',
     }));
     scope.effect(() => {
       // The tab strip and the guide row both read 电脑文件资源管理器.

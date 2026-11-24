@@ -26,8 +26,8 @@
       top: calc(var(--dwe-office-outline-top, 10px) + var(--dwe-office-inset, 0px));
       left: auto; right: 20px; width: 28px; height: 28px;
       border-radius: 8px;
-      background: color-mix(in srgb, var(--dwe-tool-state-background, var(--dwe-tool-background)) 20%, transparent);
-      backdrop-filter: blur(3px);
+      background: color-mix(in srgb, var(--dwe-tool-state-background, var(--dwe-tool-background)) var(--dwe-preview-tool-fill, 50%), transparent);
+      backdrop-filter: blur(6px);
     }
     #office-view .de-outline-toggle[aria-pressed="true"] { --dwe-tool-state-background: var(--dwe-tool-active); }
     #office-view .de-outline { top: calc(12px + var(--dwe-office-inset, 0px)); max-height: calc(100% - 24px - var(--dwe-office-inset, 0px)); }
@@ -35,6 +35,7 @@
     #office-view .de-outline-toggle:is(:hover, :active) {
       --dwe-tool-state-background: var(--dwe-tool-hover);
     }
+    #office-view .de-outline-toggle:hover:not(:disabled) { --dwe-preview-tool-fill: 80%; }
     #office-view .de-scroll[tabindex="-1"]:focus { outline: none; }
     #office-view .de-xlsx { zoom: var(--dwe-sheet-zoom, 1); }
     html[data-dwe-underlay] .de-xlsx .de-fx {

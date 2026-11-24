@@ -1,5 +1,6 @@
 import { bufferMediaSource, mediaCanSeek, openMediaSource, releaseMediaSource } from './media-source.js';
 import { readAudioTags } from './audio-tags.js';
+import { pathKey } from './navigation.js';
 
 const tracks = new Map();
 const listeners = new Set();
@@ -55,7 +56,7 @@ async function previewArtwork(cover) {
 }
 
 export function trackKey(file) {
-  return file.absolute.toLowerCase();
+  return pathKey(file.absolute);
 }
 
 async function openAudioSource(file, mime, signal, root) {
