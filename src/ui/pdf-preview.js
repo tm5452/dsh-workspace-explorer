@@ -41,7 +41,7 @@ function loadRuntime() {
 
 const pageBatch = 24;
 
-const PdfPage = react.memo(function PdfPage({ pdf, number, initialSize, width, visible, renderZoom, position }) {
+const PdfPage = react.memo(function PdfPage({ pdf, number, initialSize, width, visible, renderZoom, position, onReady }) {
   const [size, setSize] = useState(() => position.sizes?.get(number) ?? initialSize);
   const [failed, setFailed] = useState(false);
   const bitmapHost = useRef(null);
@@ -72,8 +72,12 @@ const PdfPage = react.memo(function PdfPage({ pdf, number, initialSize, width, v
         if (canceled) return;
         host.replaceChildren(bitmap);
         setFailed(false);
+        onReady?.();
       } catch {
-        if (!canceled && !host.firstChild) setFailed(true);
+        if (!canceled && !host.firstChild) {
+          setFailed(true);
+          onReady?.();
+        }
       }
     }
     void render();
@@ -82,7 +86,7 @@ const PdfPage = react.memo(function PdfPage({ pdf, number, initialSize, width, v
       task?.cancel();
       page?.cleanup();
     };
-  }, [pdf, number, visible, width, renderZoom, position]);
+  }, [pdf, number, visible, width, renderZoom, position, onReady]);
 
   const displayWidth = Math.min(width, size.width * 2);
   return h('div', {
@@ -121,7 +125,7 @@ function restorePosition(viewport, position) {
   return true;
 }
 
-function PdfPages({ pdf, initialSize, position }) {
+function PdfPages({ pdf, initialSize, position, onReady }) {
   const scroll = useRef(null);
   const committedWidth = useRef(0);
   const restoring = useRef(true);
@@ -207,12 +211,12 @@ function PdfPages({ pdf, initialSize, position }) {
 
   return h('div', { className: 'dwe-pdf-scroll', ref: scroll, tabIndex: 0, 'aria-label': '文档预览，共 ' + pdf.numPages + ' 页' },
     measured && Array.from({ length: count }, (_, index) => h(PdfPage, {
-      key: index + 1, pdf, number: index + 1, initialSize, width, renderZoom, position, visible: visible.has(index + 1),
+      key: index + 1, pdf, number: index + 1, initialSize, width, renderZoom, position, onReady, visible: visible.has(index + 1),
     })),
     measured && count < pdf.numPages && h('div', { key: 'more', className: 'dwe-pdf-more', 'aria-hidden': true }));
 }
 
-export function PdfPreview({ source, standalone, position }) {
+export function PdfPreview({ source, standalone, position, beforePresent, onReady }) {
   const localPosition = useRef({});
   const reading = position ?? localPosition.current;
   const [document, setDocument] = useState(null);
@@ -255,6 +259,7 @@ export function PdfPreview({ source, standalone, position }) {
         const pdf = await task.promise;
         if (signal.aborted) return;
         const first = await pdf.getPage(1);
+        await beforePresent?.();
         if (!signal.aborted) {
           if (reading.page > pdf.numPages) {
             reading.page = pdf.numPages;
@@ -271,8 +276,12 @@ export function PdfPreview({ source, standalone, position }) {
       controller.abort();
       void task?.destroy().catch(() => {});
     };
-  }, [source, reading]);
+  }, [source, reading, beforePresent]);
+
+  useEffect(() => {
+    if (failed) onReady?.();
+  }, [failed, onReady]);
 
   if (failed) return h(PreviewUnavailable, { standalone });
-  return document ? h(PdfPages, { ...document, position: reading }) : h('p', { className: 'dwe-preview-hint', role: 'status' }, '正在加载文档页面…');
+  return document ? h(PdfPages, { ...document, position: reading, onReady }) : h('p', { className: 'dwe-preview-hint', role: 'status' }, '正在加载文档页面…');
 }

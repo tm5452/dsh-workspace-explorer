@@ -22,9 +22,9 @@ export function saveSidebarLayout(group, { viewList, activeView, sidebarPlacemen
     },
   }));
   const savedTab = tab => isCollectionAddress(tab) ? undefined : tab;
-  const savePane = pane => ({ ...pane, active: savedTab(pane.active) });
+  const savePane = pane => ({ ...pane, active: savedTab(pane.active), tabs: pane.tabs.filter(savedTab) });
   const placement = { ...sidebarPlacement, active: savedTab(sidebarPlacement.active),
-    panes: sidebarPlacement.panes.map(savePane), floats: sidebarPlacement.floats.map(savePane) };
+    panes: sidebarPlacement.panes.map(savePane), floats: sidebarPlacement.floats.map(savePane).filter(pane => pane.tabs.length) };
   try {
     localStorage.setItem(keyPrefix + group, JSON.stringify({
       views, active: activeView?.address, placement, expanded, fileFocused,

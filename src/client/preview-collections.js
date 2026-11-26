@@ -9,6 +9,18 @@ export const isCollectionAddress = address => address === collectionAddress
 export const collectionKey = address => address === collectionPrefix ? collectionAddress : address;
 export const newCollectionAddress = () => collectionPrefix + '/' + crypto.randomUUID();
 
+export const isPreviewTab = tab => Boolean(tab && (isCollectionAddress(tab.contentId)
+  || tab.kind === PREVIEW_KIND || tab.kind === 'dsh-workspace-explorer-preview-window'));
+
+function shortcutIndexKey(group) { return 'dsh-workspace-explorer.shortcuts:' + group; }
+
+function shortcutAddresses(group) {
+  try {
+    const data = JSON.parse(localStorage.getItem(shortcutIndexKey(group)));
+    return Array.isArray(data) ? data.filter(isCollectionAddress) : [];
+  } catch { return []; }
+}
+
 export function canReturnToBrowser(file, view) {
   if (file.origin !== view.address || (view.workspaceRoot && !underPath(file.absolute, view.workspaceRoot))) return false;
   if (samePath(view.path, file.originFolder === undefined ? parentOf(file.absolute) : file.originFolder)) return true;
@@ -63,6 +75,7 @@ function restore(group, address, sessionId) {
         shortcutOrder: Number.isSafeInteger(data.window?.shortcutOrder) ? data.window.shortcutOrder
           : Number.isSafeInteger(dockOrder) ? dockOrder : undefined },
       needsOpen: Boolean(stack.tabs.length),
+      shortcut: typeof data.floating === 'boolean' ? { floating: data.floating, displayed: false } : undefined,
     };
   } catch {
     return;
@@ -71,6 +84,7 @@ function restore(group, address, sessionId) {
 
 export function createPreviewCollections(sidebar, openBeside, notify) {
   const records = new Map();
+  const retiring = new Map();
   let allEntries = [];
   let reconciling = false;
   let cleanupQueued = false;
@@ -103,7 +117,7 @@ export function createPreviewCollections(sidebar, openBeside, notify) {
     if (!records.has(key)) {
       const stored = restore(group, address, sessionId);
       const entry = { group, address, key, stack: stored?.stack ?? emptyPreviewStack,
-        window: stored?.window, needsOpen: stored?.needsOpen, checkFiles: stored?.needsOpen };
+        window: stored?.window, needsOpen: stored?.needsOpen, checkFiles: stored?.needsOpen, shortcut: stored?.shortcut };
       records.set(key, entry);
       allEntries = [...allEntries, entry];
       if (stored && address === collectionAddress) {
@@ -125,9 +139,56 @@ export function createPreviewCollections(sidebar, openBeside, notify) {
         origin: file.origin, originFolder: file.originFolder, originWorkspace: file.originWorkspace,
         originOutsideFolder: file.originOutsideFolder }, root }));
       const { maximized, restoreToSidebar, minimizedFromInline, shortcutOrder } = entry.window ?? {};
-      localStorage.setItem(entry.key, JSON.stringify({ tabs,
+      localStorage.setItem(entry.key, JSON.stringify({ tabs, floating: entry.shortcut?.floating,
         window: { maximized, restoreToSidebar, minimizedFromInline, shortcutOrder } }));
+      const index = new Set(shortcutAddresses(entry.group));
+      if (tabs.length) index.add(entry.address);
+      else index.delete(entry.address);
+      saveShortcutIndex(entry.group, [...index]);
     } catch { /* The current window still retains the tabs. */ }
+  }
+
+  function saveShortcutIndex(group, addresses) {
+    if (addresses.length) localStorage.setItem(shortcutIndexKey(group), JSON.stringify(addresses));
+    else localStorage.removeItem(shortcutIndexKey(group));
+  }
+
+  function finishRetired(sessionId, inventory, layout) {
+    const inventoryIds = new Set(inventory.map(tab => tab.tabId ?? tab.id));
+    for (const [id, pending] of retiring) {
+      if (pending.sessionId !== sessionId || inventoryIds.has(id) || layout?.tabs[id]) continue;
+      retiring.delete(id);
+      if (pending.callback) queueMicrotask(pending.callback);
+    }
+  }
+
+  function withdraw(entry, floating = Boolean(entry.shortcut?.floating)) {
+    entry.tabId = entry.sessionId = undefined;
+    entry.dockSelected = false;
+    entry.shortcut = { floating, displayed: false };
+    persist(entry);
+  }
+
+  function discard(entry) {
+    entry.sessionId = entry.tabId = undefined;
+    entry.stack = emptyPreviewStack;
+    records.delete(entry.key);
+    entry.host?.remove();
+    allEntries = allEntries.filter(item => item !== entry);
+    try {
+      localStorage.removeItem(entry.key);
+      saveShortcutIndex(entry.group, shortcutAddresses(entry.group).filter(address => address !== entry.address));
+    } catch { /* Storage unavailable. */ }
+    publish();
+  }
+
+  function storeShortcut(stack, target) {
+    stack = appendStackPreview(stack, target.file, target.root);
+    if (target.surface || target.pdfPosition) {
+      stack = { ...stack, tabs: stack.tabs.map(tab => tab.id === stack.active && !tab.surface
+        ? { ...tab, surface: target.surface, pdfPosition: target.pdfPosition ?? tab.pdfPosition } : tab) };
+    }
+    return stack;
   }
 
   function remove(entry, ids) {
@@ -136,6 +197,10 @@ export function createPreviewCollections(sidebar, openBeside, notify) {
 
   function change(entry, stack) {
     if (entry.stack === stack) return;
+    if (!entry.tabId && !stack.tabs.length) {
+      discard(entry);
+      return;
+    }
     entry.stack = stack;
     persist(entry);
     publish();
@@ -146,22 +211,25 @@ export function createPreviewCollections(sidebar, openBeside, notify) {
       tab.sessionId === sessionId && tab.kind === PREVIEW_KIND && isCollectionAddress(tab.contentId));
   }
 
-  function open(entry, sessionId, targets, paneId, { focus = true, allowEmpty = false, floating = false, keepEmptyFloat = false } = {}) {
+  function open(entry, sessionId, targets, paneId, {
+    focus = true, allowEmpty = false, floating = false, keepEmptyFloat = false, rebind = false,
+  } = {}) {
     if (!sessionId || sidebar.mounted.getSnapshot() !== sessionId || (!allowEmpty && !targets.length)) return false;
     const [target] = targets;
     if (targets.length > 1 || (target && entry.stack.tabs.some(tab => !samePath(tab.file.absolute, target.file.absolute)))) return false;
-    let next = target ? appendStackPreview(entry.stack, target.file, target.root) : entry.stack;
-    if (target?.surface) {
-      next = { ...next, tabs: next.tabs.map(tab => tab.id === next.active && !tab.surface
-        ? { ...tab, surface: target.surface } : tab) };
+    const next = target ? storeShortcut(entry.stack, target) : entry.stack;
+    function findNativeTab() {
+      const layout = rebind && sidebar.mountedSurface?.()?.layout;
+      return find(sessionId).find(tab => collectionKey(tab.contentId) === entry.address
+        && !retiring.has(tab.tabId ?? tab.id) && (!layout || layout.tabs[tab.tabId ?? tab.id]));
     }
-    let existing = find(sessionId).find(tab => collectionKey(tab.contentId) === entry.address);
+    let existing = findNativeTab();
     try {
       if (!existing) {
         if (floating) sidebar.openResource(entry.address, { kind: PREVIEW_KIND, destination: 'float' });
         else if (entry.address === collectionAddress && sidebar.openTab) sidebar.openTab(PREVIEW_KIND, { paneId });
         else openBeside(entry.address, { kind: PREVIEW_KIND, paneId });
-        existing = find(sessionId).find(tab => collectionKey(tab.contentId) === entry.address);
+        existing = findNativeTab();
         if (!existing) return false;
       }
       entry.tabId = existing.tabId ?? existing.id;
@@ -186,7 +254,46 @@ export function createPreviewCollections(sidebar, openBeside, notify) {
   }
 
   return {
-    record, open, find, remove, persistWindow: persist, entries: () => allEntries, revision: () => revision,
+    record, open, find, remove, discard, persistWindow: persist, entries: () => allEntries, revision: () => revision,
+    restoreShortcuts(group, sessionId, placement) {
+      const floating = new Set(placement?.floats.flatMap(pane => pane.tabs));
+      const old = [...(placement?.panes ?? []), ...(placement?.floats ?? [])].flatMap(pane => pane.tabs);
+      for (const address of new Set([...shortcutAddresses(group), ...old.filter(isCollectionAddress)])) {
+        const entry = record(group, sessionId, address);
+        if (!entry.stack.tabs.length) {
+          discard(entry);
+          continue;
+        }
+        entry.shortcut ??= { floating: floating.has(address), displayed: false };
+        persist(entry);
+      }
+    },
+    pin(entry, target) { change(entry, storeShortcut(entry.stack, target)); },
+    replace(entry, target) {
+      const matching = entry.stack.tabs.filter(tab => samePath(tab.file.absolute, target.file.absolute));
+      const stack = { ...entry.stack, tabs: matching };
+      entry.needsOpen = false;
+      entry.checkFiles = false;
+      change(entry, storeShortcut(stack, target));
+    },
+    park(entry, floating = false) {
+      if (!entry.tabId) return;
+      const { sessionId, tabId } = entry;
+      const pending = { entry, sessionId };
+      retiring.set(tabId, pending);
+      withdraw(entry, floating);
+      sidebar.closeIn(sessionId, tabId);
+      finishRetired(sessionId, find(sessionId), sidebar.mountedSurface?.()?.layout);
+      publish();
+    },
+    afterPark(entry, callback) {
+      for (const pending of retiring.values()) {
+        if (pending.entry !== entry) continue;
+        pending.callback = callback;
+        return true;
+      }
+      return false;
+    },
     transfer(source, destination, id) {
       const item = source.stack.tabs.find(tab => tab.id === id);
       if (!item || source === destination || destination.stack.tabs.length) return false;
@@ -209,7 +316,13 @@ export function createPreviewCollections(sidebar, openBeside, notify) {
         ? { ...item, pdfPosition: item.surface?.pdfPosition, surface: undefined } : item);
       if (tabs.some((item, index) => item !== entry.stack.tabs[index])) change(entry, { ...entry.stack, tabs });
     },
-    unbind(entry) { const id = entry.tabId; entry.tabId = entry.sessionId = undefined; return id; },
+    unbind(entry) {
+      const id = entry.tabId;
+      entry.tabId = entry.sessionId = undefined;
+      entry.dockSelected = false;
+      if (entry.shortcut) entry.shortcut = { ...entry.shortcut, displayed: false };
+      return id;
+    },
     removePaths(paths) {
       if (!paths.length) return;
       const removed = tab => paths.some(path => underPath(tab.file.absolute, path));
@@ -231,13 +344,19 @@ export function createPreviewCollections(sidebar, openBeside, notify) {
     },
     sync(group, sessionId) {
       if (reconciling) return;
-      const tabs = find(sessionId);
+      const inventory = find(sessionId);
+      const layout = sidebar.mounted.getSnapshot() === sessionId && sidebar.mountedSurface?.()?.layout;
+      finishRetired(sessionId, inventory, layout);
+      const tabs = inventory.filter(tab => !retiring.has(tab.tabId ?? tab.id));
+      const liveAddresses = new Set(layout ? tabs.filter(tab => layout.tabs[tab.tabId ?? tab.id])
+        .map(tab => collectionKey(tab.contentId)) : []);
       const duplicates = [];
       const live = new Set();
       const addresses = new Set();
       for (const tab of tabs) {
         const id = tab.tabId ?? tab.id;
         const address = collectionKey(tab.contentId);
+        if (liveAddresses.has(address) && !layout.tabs[id]) continue;
         if (addresses.has(address)) { duplicates.push(id); continue; }
         addresses.add(address);
         const entry = record(group, sessionId, address);
@@ -248,18 +367,12 @@ export function createPreviewCollections(sidebar, openBeside, notify) {
       reconciling = true;
       try { for (const id of duplicates) sidebar.closeIn?.(sessionId, id); }
       finally { reconciling = false; }
-      const closed = allEntries.filter(entry => entry.sessionId === sessionId && !live.has(entry));
+      const closed = allEntries.filter(entry => entry.sessionId === sessionId && entry.tabId && !live.has(entry));
       for (const entry of closed) {
-        entry.sessionId = entry.tabId = undefined;
-        entry.stack = emptyPreviewStack;
-        records.delete(entry.key);
-        entry.host?.remove();
-        try { localStorage.removeItem(entry.key); } catch { /* Storage unavailable. */ }
+        if (entry.explicitClose || !entry.stack.tabs.length) discard(entry);
+        else withdraw(entry);
       }
-      if (closed.length) {
-        allEntries = allEntries.filter(entry => !closed.includes(entry));
-        publish();
-      }
+      if (closed.length) publish();
       scheduleEmptyPreviewCleanup();
     },
   };

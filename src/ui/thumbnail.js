@@ -33,7 +33,7 @@ function waitForFrame(media, event, signal) {
   });
 }
 
-export async function makeThumbnail(path, type, signal, root, poster = false) {
+export async function makeThumbnail(path, type, signal, root, poster = false, beforeDraw) {
   const { url } = await disks.thumbnail(path, signal, root);
   signal.throwIfAborted();
   const video = type.startsWith('video/');
@@ -48,6 +48,8 @@ export async function makeThumbnail(path, type, signal, root, poster = false) {
       media.currentTime = Math.min(0.7, media.duration * 0.12);
       await seeked;
     }
+    await beforeDraw?.();
+    signal.throwIfAborted();
     const width = video ? media.videoWidth : media.naturalWidth;
     const height = video ? media.videoHeight : media.naturalHeight;
     if (!width || !height) throw new Error('缩略图为空');

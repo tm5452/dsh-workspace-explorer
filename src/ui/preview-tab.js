@@ -26,7 +26,7 @@ export function readLegacyPreviewAddress(address) {
 }
 
 export function FilePreviewTab({
-  sessionId, address, paneId, stack, visible, floating, floatTitle, startPreviewDrag,
+  sessionId, address, paneId, stack, ready, visible, floating, floatTitle, startPreviewDrag,
   surfaceFor, parkSurface, openFloat, returnInline, openLocal, openNative, send, renamed, preferences,
   minimizeSidebar, maximizeSidebar, closeSidebar, labelInFlight,
 }) {
@@ -62,6 +62,8 @@ export function FilePreviewTab({
       h(PreviewWindowButtons, { minimize: minimizeSidebar, openFloat, returnInline, maximize: maximizeSidebar, close: closeSidebar }))),
   h('div', { className: 'dwe-preview-body' },
     h('div', { className: 'dwe-preview-anchor', ref: anchor, hidden: !file }),
+    file && h('div', { key: item.id, className: 'dwe-preview-loading-cover', 'data-ready': ready || undefined,
+      role: 'status', 'aria-hidden': ready || undefined, 'aria-label': '正在加载预览' }, fileIcon(file.name, 'file', 40)),
     !file && h('p', { className: 'dwe-preview-hint dwe-preview-placeholder' }, '拖入文件以预览'),
     menu.render,
     visible && h(PreviewExtensionButtons, { preferences, sessionId, file, mode: 'standalone' })));

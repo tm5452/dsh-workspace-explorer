@@ -1,10 +1,15 @@
 const h = react.createElement;
 
-export function HiddenPreviewTabs({ tabs }) {
-  if (!tabs.length) return null;
+export function HiddenPreviewTabs({ tabs, guides = [] }) {
+  if (!tabs.length && !guides.length) return null;
   const strip = '[data-sidebar-right-panel] [data-dockkit-strip-tabs] ';
-  const ids = tabs.map(tab => '[data-dockkit-tab="' + CSS.escape(tab.tabId ?? tab.id) + '"]');
-  const hidden = ':is(' + ids.join(',') + ')';
-  const divider = ':not([data-dockkit-tab], [data-dockkit-caret])';
-  return h('style', null, `${strip}${hidden}, ${strip}${hidden}:first-child + ${divider}, ${strip}${divider}:has(+ ${hidden}) {display:none!important}`);
+  const tabSelector = id => '[data-dockkit-tab="' + CSS.escape(id) + '"]';
+  const hide = [];
+  if (tabs.length) {
+    const hidden = ':is(' + tabs.map(tab => tabSelector(tab.tabId ?? tab.id)).join(',') + ')';
+    const divider = ':not([data-dockkit-tab], [data-dockkit-caret])';
+    hide.push(strip + hidden, strip + hidden + ':first-child + ' + divider, strip + divider + ':has(+ ' + hidden + ')');
+  }
+  for (const id of guides) hide.push(strip + tabSelector(id) + ' [data-dockkit-tab-close]');
+  return h('style', null, hide.join(', ') + ' {display:none!important}');
 }

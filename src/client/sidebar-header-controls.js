@@ -1,5 +1,7 @@
 import { extensionAreas } from '../extensions/registry.js';
 import { ExtensionButtons } from '../ui/extension-controls.js';
+import { mountIcon } from '../ui/interface-icon.js';
+import { hasDockedTabs, openSidebar } from './sidebar-close.js';
 
 const panelSelector = '[data-sidebar-right-panel]';
 const cornerSelector = '[data-conversation-header-corner]';
@@ -14,7 +16,7 @@ const sourceSelectors = [
   splitSelector,
   modeSelector,
 ];
-const watched = [panelSelector, cornerSelector, stripSelector].join(', ');
+const watched = [panelSelector, cornerSelector, stripSelector, '[data-rightbar-col]', '[data-rightbar-collapsed]'].join(', ');
 
 function length(style, property) {
   return Number.parseFloat(style[property]) || 0;
@@ -50,6 +52,8 @@ export function installSidebarHeaderControls(sidebar, preferences, floatDockHost
   group.setAttribute('data-dwe-shortcuts-detached', '');
   let sources = [];
   let frame = 0;
+  let activePanel;
+  let fullscreenPanel;
   let observedHeader;
   let observedStrip;
   let anchor;
@@ -60,11 +64,25 @@ export function installSidebarHeaderControls(sidebar, preferences, floatDockHost
     return nativeCanSplit.call(this, sessionId, paneId);
   }
   if (typeof nativeCanSplit === 'function') sidebar.canSplitPane = canSplitPane;
+  function sidebarIsVisible() {
+    const layout = sidebar.mountedSurface?.()?.layout;
+    return sidebar.isExpanded() && activePanel?.dataset.sidebarRightSession === sidebar.mounted.getSnapshot()
+      && activePanel?.hasAttribute('data-sidebar-right-open') && (!layout || hasDockedTabs(layout));
+  }
+
   const proxies = sourceSelectors.map((_, index) => {
     const button = document.createElement('button');
     button.type = 'button';
+    if (index === 0) button.setAttribute('data-dwe-sidebar-toggle-proxy', '');
     button.hidden = true;
     button.addEventListener('click', () => {
+      if (index === 0) {
+        const session = sidebar.mounted.getSnapshot();
+        if (sidebarIsVisible() && sources[0]?.matches(toggleSelector)) sidebar.toggleExpanded();
+        else openSidebar(sidebar, session, { recover: true });
+        schedule();
+        return;
+      }
       const source = sources[index];
       if (index === 1 && wideStrip && !hasSplitRoom(wideStrip)) return;
       if (source?.isConnected) source.click();
@@ -111,8 +129,26 @@ export function installSidebarHeaderControls(sidebar, preferences, floatDockHost
     group.style.setProperty('--dwe-shortcut-available-width', Math.max(toolSize, bounds.right - 8) + 'px');
   }
 
-  function clear() {
-    position(null);
+  function showExpand() {
+    const button = proxies[0];
+    button.hidden = false;
+    button.disabled = false;
+    button.title = '展开右侧栏';
+    button.setAttribute('aria-label', button.title);
+    for (const attr of ['aria-pressed', 'aria-expanded', 'aria-keyshortcuts']) button.removeAttribute(attr);
+    const glyph = button.firstElementChild?.hasAttribute('data-dwe-expand-fallback') && button.firstElementChild;
+    if (!glyph) {
+      const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      svg.setAttribute('fill', 'none');
+      svg.setAttribute('aria-hidden', 'true');
+      svg.setAttribute('data-dwe-expand-fallback', '');
+      mountIcon(svg, 'dock-to-sidebar');
+      button.replaceChildren(svg);
+    }
+  }
+
+  function clear(corner = null) {
+    position(corner);
     for (const button of proxies) button.hidden = true;
     for (const source of sources) source?.removeAttribute('data-dwe-header-proxied');
     sources = [];
@@ -129,12 +165,23 @@ export function installSidebarHeaderControls(sidebar, preferences, floatDockHost
     const panel = session && document.querySelector(
       panelSelector + '[data-sidebar-right-session="' + CSS.escape(session) + '"]',
     );
-    const expanded = sidebar.isExpanded();
+    activePanel = panel;
+    const expanded = sidebarIsVisible();
+    const fullscreen = expanded && panel?.dataset.sidebarRightPanel === 'fullscreen';
+    const railPanel = fullscreen ? panel : undefined;
+    if (fullscreenPanel !== railPanel) {
+      if (fullscreenPanel) resize.unobserve(fullscreenPanel);
+      if (railPanel) resize.observe(railPanel);
+      fullscreenPanel = railPanel;
+    }
+    group.toggleAttribute('data-dwe-shortcuts-fullscreen', Boolean(fullscreen));
+    if (railPanel) group.style.setProperty('--dwe-shortcut-panel-left', railPanel.getBoundingClientRect().left + 'px');
+    else group.style.removeProperty('--dwe-shortcut-panel-left');
     const conversation = panel?.closest('[data-rightbar-col]')?.previousElementSibling;
     let corner = conversation?.querySelector('header ' + cornerSelector);
     if (session && !expanded && !corner?.querySelector(expandSelector)) {
       corner = [...document.querySelectorAll(cornerSelector)].find(node => node.getClientRects().length
-        && !node.closest('[hidden], [inert], [aria-hidden="true"]') && node.querySelector(expandSelector));
+        && !node.closest('[hidden], [inert], [aria-hidden="true"]') && node.querySelector(expandSelector)) ?? corner;
     }
     const header = corner?.closest('header');
     if (header !== observedHeader) {
@@ -144,16 +191,17 @@ export function installSidebarHeaderControls(sidebar, preferences, floatDockHost
     }
     const chrome = expanded ? panel?.querySelector(chromeSelector) : null;
     const strip = chrome?.closest(stripSelector);
-    if (!header || (expanded && (panel?.dataset.sidebarRightPanel !== 'push' || !strip
-        || header.getBoundingClientRect().width < 180))) {
-      clear();
+    if (!session || (expanded && !strip) || (!expanded && !header)) {
+      clear(fullscreen ? null : corner);
+      if (session && !expanded) showExpand();
       return;
     }
 
     const next = expanded ? sourceSelectors.map(selector => strip.querySelector('button' + selector))
-      : [corner.querySelector(expandSelector), null, null];
+      : [corner?.querySelector(expandSelector), null, null];
     if (!next[0] || (expanded && !next[2])) {
-      clear();
+      clear(fullscreen ? null : corner);
+      if (session && !expanded) showExpand();
       return;
     }
     for (const source of sources) {
@@ -176,7 +224,7 @@ export function installSidebarHeaderControls(sidebar, preferences, floatDockHost
       observedStrip = strip;
     }
     const blockedByWidth = wideStrip && !hasSplitRoom(wideStrip);
-    const menuIcon = header.querySelector('button[class*="headerMenuButton"] svg');
+    const menuIcon = header?.querySelector('button[class*="headerMenuButton"] svg');
     const iconSize = menuIcon?.getBoundingClientRect().width;
     const size = iconSize > 0 ? iconSize + 'px' : '';
     if (group.style.getPropertyValue('--dwe-shortcut-icon-size') !== size) {
@@ -202,7 +250,7 @@ export function installSidebarHeaderControls(sidebar, preferences, floatDockHost
       const glyph = source.querySelector('svg');
       if (glyph && button.firstElementChild?.outerHTML !== glyph.outerHTML) button.replaceChildren(glyph.cloneNode(true));
     }
-    position(corner);
+    position(fullscreen ? null : corner ?? (anchor?.isConnected ? anchor : null));
     if (extensionRoot && session !== extensionSession) {
       extensionSession = session;
       extensionRoot.render(react.createElement(ExtensionButtons, { preferences, area: extensionArea,
@@ -224,13 +272,16 @@ export function installSidebarHeaderControls(sidebar, preferences, floatDockHost
     subtree: true, childList: true,
     attributes: true,
     attributeFilter: ['disabled', 'hidden', 'aria-label', 'aria-keyshortcuts', 'aria-pressed', 'aria-expanded', 'data-sidebar-right-panel',
-      'data-sidebar-right-open', 'data-dockkit-split-blocked', 'data-sidebar-right-mode'],
+      'data-sidebar-right-open', 'data-dockkit-split-blocked', 'data-sidebar-right-mode',
+      'data-rightbar-collapsed', 'data-rightbar-fullscreen', 'aria-hidden', 'inert'],
   });
   const stop = sidebar.mounted.subscribe(schedule);
+  const stopTabs = sidebar.openTabs?.subscribe(schedule);
   window.addEventListener('resize', schedule);
   schedule();
   return () => {
     stop();
+    stopTabs?.();
     observer.disconnect();
     resize.disconnect();
     window.removeEventListener('resize', schedule);

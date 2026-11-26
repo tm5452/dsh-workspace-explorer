@@ -7,6 +7,7 @@ export function createPreviewFloatDock({ focus, close, persist }) {
   const windows = new Map();
   const slots = new WeakMap();
   const listeners = new Set();
+  let releaseShortcut;
   let revision = 0;
   let order = Date.now();
   const dockedLabel = entry => entry.host?.querySelector('[data-dwe-docked-preview] .dwe-preview-drag');
@@ -16,6 +17,12 @@ export function createPreviewFloatDock({ focus, close, persist }) {
   function publish() {
     revision++;
     for (const listener of listeners) listener();
+  }
+
+  function cancelShortcutRelease() {
+    const previous = releaseShortcut;
+    releaseShortcut = undefined;
+    previous?.cancel?.();
   }
 
   function apply({ entry, element }) {
@@ -62,7 +69,7 @@ export function createPreviewFloatDock({ focus, close, persist }) {
   }
 
   function canMinimize(window) {
-    return window && window.slot && !window.docking && window.entry.window?.dockOrder === undefined;
+    return window && window.slot && window.entry.window?.dockOrder === undefined;
   }
 
   function minimize(window) {
@@ -82,15 +89,27 @@ export function createPreviewFloatDock({ focus, close, persist }) {
       return () => listeners.delete(listener);
     },
     getSnapshot: () => revision,
+    startShortcutRelease(start) {
+      cancelShortcutRelease();
+      const current = {};
+      releaseShortcut = current;
+      current.cancel = start(() => {
+        if (releaseShortcut === current) releaseShortcut = undefined;
+      });
+    },
+    cancelShortcutRelease,
     flyShortcut: shortcutMotion.start,
     retractPreviewToShortcut(entry) {
-      const source = dockedLabel(entry);
+      const label = dockedLabel(entry);
       shortcutMotion.cancel(entry);
-      shortcutMotion.start(entry, source, 'shortcut', { holdSource: true });
+      shortcutMotion.start(entry, label, 'shortcut', { holdSource: true });
     },
     shortcutFlightState: shortcutMotion.state,
     cancelShortcutFlight: shortcutMotion.cancel,
-    clearShortcutFlights: shortcutMotion.clear,
+    clearShortcutFlights() {
+      cancelShortcutRelease();
+      shortcutMotion.clear();
+    },
     installQuickMinimize(getMode) {
       const lifetime = new AbortController();
       const options = { capture: true, signal: lifetime.signal };
@@ -168,14 +187,14 @@ export function createPreviewFloatDock({ focus, close, persist }) {
     },
     maximize(entry, maximized = !entry.window?.maximized) {
       const window = windows.get(entry);
-      if (!window || window.docking) return;
+      if (!window) return;
       setState(window, { ...entry.window, maximized, restoreToSidebar: maximized && entry.window?.restoreToSidebar,
         restoreToInline: maximized && entry.window?.restoreToInline });
       publish();
     },
-    restore(entry, state) {
+    restore(entry, state, { animate: playMotion = true } = {}) {
       const window = windows.get(entry);
-      if (!window || window.docking) return;
+      if (!window) return;
       if (entry.window?.dockOrder === undefined) {
         focus(entry);
         return;
@@ -183,47 +202,17 @@ export function createPreviewFloatDock({ focus, close, persist }) {
       const source = window.element.hasAttribute(motionAttribute) ? window.element.getBoundingClientRect()
         : window.slot?.getBoundingClientRect();
       cancelMotion(window);
-      window.element.setAttribute(motionAttribute, '');
+      if (playMotion) window.element.setAttribute(motionAttribute, '');
       setState(window, { ...entry.window, ...state, dockOrder: undefined });
       focus(entry);
-      animate(window, source, window.element.getBoundingClientRect());
+      if (playMotion) animate(window, source, window.element.getBoundingClientRect());
       publish();
-    },
-    dockIntoSidebar(entry, transfer) {
-      const window = windows.get(entry);
-      if (!window || window.docking || !entry.stack.tabs.length) return;
-      if (entry.window.dockOrder !== undefined || matchMedia('(prefers-reduced-motion: reduce)').matches) {
-        transfer();
-        return;
-      }
-      cancelMotion(window);
-      window.docking = true;
-      window.element.inert = true;
-      const animation = window.element.animate([{ opacity: 1 }, { opacity: 0 }], {
-        duration: 150, easing: 'ease-out', fill: 'forwards',
-      });
-      window.animation = animation;
-      animation.onfinish = () => {
-        if (window.animation !== animation) return;
-        let transferred;
-        try { transferred = transfer(); }
-        finally {
-          if (!transferred && windows.get(entry) === window) {
-            window.docking = false;
-            cancelMotion(window);
-            apply(window);
-          }
-        }
-      };
     },
     close(list, entry, mode) {
       const index = list.indexOf(entry);
       if (index < 0) return;
       const targets = mode === 'all' ? list : mode === 'below' ? list.slice(index + 1) : [entry];
-      for (const target of targets) {
-        shortcutMotion.cancel(target);
-        close(target);
-      }
+      for (const target of targets) close(target);
     },
     reorder(entries, entry, target, after) {
       const list = [...entries];

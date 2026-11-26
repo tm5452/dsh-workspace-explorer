@@ -1,5 +1,5 @@
 import { buttonDisplays, conversationFileViews, fileDoubleClickActions, gestureActions, gestureDirections,
-  quickFloatMinimizeActions, tabScopes } from '../client/preferences.js';
+  inlinePreviewActions, quickFloatMinimizeActions, tabScopes } from '../client/preferences.js';
 import { icon } from './interface-icon.js';
 
 const { createElement: h, useId, useSyncExternalStore } = react;
@@ -52,6 +52,7 @@ export function ExplorerPreferences({ preferences }) {
         setting('initialSidebarPercent', '初始侧栏占窗口宽度', initialSidebarPercent, undefined,
           { range: { min: 15, max: 80 }, description: '首次使用时生效。已调整过的侧栏宽度会随布局保存。' }),
         setting('fileDoubleClick', '鼠标双击文件时的操作', fileDoubleClick, fileDoubleClickActions),
+        setting('inlinePreviewAction', '底部预览窗的常用打开按钮', state.inlinePreviewAction, inlinePreviewActions),
         setting('quickFloatMinimize', '快速收回所有小窗', state.quickFloatMinimize, quickFloatMinimizeActions),
         setting('conversationFileView', '从会话中打开文件的方式', conversationFileView, conversationFileViews),
         setting('newTabPreviewOpen', '新建标签页时开启预览窗格', newTabPreviewOpen, undefined,

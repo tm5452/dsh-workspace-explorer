@@ -25,7 +25,14 @@ export const fileDoubleClickActions = {
   preview: '使用小窗打开',
   sidebar: '使用右侧栏打开',
   fullscreen: '使用全屏打开',
+  shortcut: '添加到侧列快捷键',
   reveal: '在' + fileManagerLabel + '中显示',
+};
+
+export const inlinePreviewActions = {
+  window: '小窗打开',
+  sidebar: '侧栏打开',
+  maximized: '最大化',
 };
 
 export const quickFloatMinimizeActions = {
@@ -51,10 +58,14 @@ export const gestureActions = {
 const defaultGestures = { left: 'back', right: 'forward', up: 'up', down: 'none' };
 
 function normalize(value) {
+  const fileDoubleClick = Object.hasOwn(fileDoubleClickActions, value?.fileDoubleClick) ? value.fileDoubleClick : 'preview';
+  const oldInlineAction = fileDoubleClick === 'preview' ? 'window' : fileDoubleClick === 'fullscreen' ? 'maximized' : 'sidebar';
   return {
     tabScope: Object.hasOwn(tabScopes, value?.tabScope) ? value.tabScope : 'global',
     conversationFileView: Object.hasOwn(conversationFileViews, value?.conversationFileView) ? value.conversationFileView : 'split',
-    fileDoubleClick: Object.hasOwn(fileDoubleClickActions, value?.fileDoubleClick) ? value.fileDoubleClick : 'preview',
+    fileDoubleClick,
+    inlinePreviewAction: Object.hasOwn(inlinePreviewActions, value?.inlinePreviewAction)
+      ? value.inlinePreviewAction : oldInlineAction,
     quickFloatMinimize: Object.hasOwn(quickFloatMinimizeActions, value?.quickFloatMinimize) ? value.quickFloatMinimize : 'composer',
     initialSidebarPercent: Number.isInteger(Number(value?.initialSidebarPercent)) && Number(value.initialSidebarPercent) >= 15 && Number(value.initialSidebarPercent) <= 80
       ? Number(value.initialSidebarPercent) : 30,

@@ -1,10 +1,12 @@
 # DSH 工作区资源管理器
 
-在 DeepSeek Harness 桌面端浏览本机文件、整理资料和预览文档。**1.3.0 正式版适配 Windows、macOS 和 Linux，把资源浏览与文件预览分开。** 你可以继续在文件列表里查找、复制或整理文件，同时在另一栏或浮窗里阅读文档、看图或播放媒体。
+在 DeepSeek Harness 桌面端浏览本机文件、整理资料和预览文档。**适配 Windows、macOS 和兼容的 Linux 桌面宿主，支持在独立窗口中预览文件。** 你可以继续在文件列表里查找、复制或整理文件，同时在另一栏或浮窗里阅读文档、看图或播放媒体。
 
-[下载 1.3.0](https://github.com/tm5452/dsh-workspace-explorer/releases/tag/v1.3.0) · [版本记录](CHANGELOG.md)
+[下载 1.3.1](https://github.com/tm5452/dsh-workspace-explorer/releases/tag/v1.3.1) · [版本记录](CHANGELOG.md)
 
-## 1.3.0 的预览方式
+1.3.1 修复了关闭最后一个标签页后右侧栏可能失效的问题，并新增侧列快捷键拖放。上下拖动排序，向左打开小窗，向右打开侧栏。分屏时可将预览拖到指定窗格。
+
+## 文件预览方式
 
 - **单击快速预览。** 文件浏览页下方可以随时开关预览窗格。双击使用你在「设置 → 电脑文件资源管理器」中选定的打开方式。
 - **按需切换预览位置。** 同一个文件可在下方预览窗、右侧栏、小窗和最大化预览之间切换。右侧栏和小窗使用一致的窗口控件，也支持返回文件浏览页的预览窗。
@@ -59,10 +61,10 @@
 
 需要能加载本插件的 **DeepSeek Harness 桌面宿主**。Windows、macOS 和兼容的 Linux 桌面宿主使用同一份安装包。磁盘和目录访问遵循运行 DSH 的账户权限。原生文件操作使用各系统的文件服务，Linux 上部分宗卷的回收站操作需要系统提供 `gio`。
 
-在 DSH 的「插件 → 添加插件」输入 `dsh-workspace-explorer`，或从 [GitHub Releases](https://github.com/tm5452/dsh-workspace-explorer/releases/tag/v1.3.0) 下载 `.tgz` 后填入本地路径。用命令行也可以安装：
+在 DSH 的「插件 → 添加插件」输入 `dsh-workspace-explorer`，或从 [GitHub Releases](https://github.com/tm5452/dsh-workspace-explorer/releases/tag/v1.3.1) 下载 `.tgz` 后填入本地路径。用命令行也可以安装：
 
 ```sh
-dsh plugin --profile web add dsh-workspace-explorer@1.3.0
+dsh plugin --profile web add dsh-workspace-explorer
 ```
 
 使用本地测试包或目录链接的用户可以先移除旧条目。安装后完全退出并重新启动 DSH。
@@ -73,6 +75,7 @@ dsh plugin --profile web add dsh-workspace-explorer@1.3.0
 
 - PDF 预览使用 Mozilla 的 [PDF.js 5.6.205](https://github.com/mozilla/pdf.js/releases/tag/v5.6.205)，采用 Apache-2.0。许可证随引擎、字体、CMap 和 WebAssembly 资源分发。 [PDF.js 许可与资源](assets/pdf-engine/)
 - Office 预览使用 p10node 的 [office-engine 0.14.2](https://github.com/p10node/office-engine/tree/v0.14.2)，采用 MIT。本项目在嵌入版上适配了内容引用。 [Office 引擎许可证](assets/office-engine/LICENSE) · [内置组件版权声明](assets/office-engine/THIRD_PARTY_LICENSES.txt)
+- 快捷键拖放使用 [Motion](https://github.com/motiondivision/motion) 的弹簧生成器，采用 MIT 许可证。[Motion 许可证](src/vendor/motion-spring/LICENSE.md)
 - 部分扩展格式预览沿用 [dsh-preview-extra](https://github.com/LeiYuXingZhou/dsh-preview-extra)。 [扩展预览许可证](LICENSE-preview-extra)
 
 贡献方式见 [贡献指南](CONTRIBUTING.md)。

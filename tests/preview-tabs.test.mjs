@@ -88,6 +88,7 @@ test('standalone previews keep one file per entry and survive rebinding across s
   assert.equal(shared.stack.tabs.length, 1);
   assert.equal(shared.stack.active, shared.stack.tabs[0].id);
   allTabs = [];
+  shared.explicitClose = true;
   first.sync('global', session);
   assert.equal(stored.size, 0);
   const attachedSurface = { key: 'existing-viewer' };
@@ -111,8 +112,8 @@ test('standalone previews keep one file per entry and survive rebinding across s
   });
   const placement = loadSidebarLayout('global').placement;
   assert.equal(placement.active, undefined);
-  assert.deepEqual(placement.panes, [{ tabs: ['browser', address] }]);
-  assert.deepEqual(placement.floats, [{ tabs: [collectionAddress], rect: { x: 20 } }]);
+  assert.deepEqual(placement.panes, [{ tabs: ['browser'] }]);
+  assert.deepEqual(placement.floats, []);
 });
 
 test('returning to the originating browser checks its path and workspace mode', () => {
@@ -190,4 +191,27 @@ test('a new empty float survives until its first file is removed or transferred'
   collections.close(docked, docked.stack.active);
   await Promise.resolve();
   assert.deepEqual(closed, [first.tabId, second.tabId, docked.tabId]);
+});
+
+test('replacing a floating preview keeps its native tab, shortcut slot, and incoming viewer', () => {
+  const collections = createPreviewCollections({}, () => {}, () => {});
+  const entry = collections.record('group', undefined, 'window');
+  entry.tabId = 'original-native-tab';
+  entry.window = { shortcutOrder: 10 };
+  const original = { ...normalizePreviewFile(file('old.txt')), surface: { key: 'old' } };
+  collections.pin(entry, original);
+  const oldId = entry.stack.active;
+  const incoming = { ...normalizePreviewFile(file('new.pdf')), surface: { key: 'existing' }, pdfPosition: { page: 3 } };
+  collections.replace(entry, incoming);
+  assert.equal(entry.tabId, 'original-native-tab');
+  assert.equal(entry.window.shortcutOrder, 10);
+  assert.deepEqual(entry.stack.tabs.map(tab => tab.file.name), ['new.pdf']);
+  assert.notEqual(entry.stack.active, oldId);
+  assert.equal(entry.stack.tabs[0].surface, incoming.surface);
+  assert.equal(entry.stack.tabs[0].pdfPosition, incoming.pdfPosition);
+
+  const id = entry.stack.active;
+  collections.replace(entry, normalizePreviewFile(file('new.pdf')));
+  assert.equal(entry.stack.active, id);
+  assert.equal(entry.stack.tabs[0].surface, incoming.surface);
 });

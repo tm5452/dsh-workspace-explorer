@@ -141,7 +141,7 @@ function MusicCard({ track, file, active, playing }) {
     track?.failed && h('span', { className: 'dwe-music-error', role: 'status' }, '无法预览此音频'));
 }
 
-export function MusicPreview({ file, root, mime, onRestore }) {
+export function MusicPreview({ file, root, mime, onRestore, beforePresent, onReady }) {
   const [loaded, setLoaded] = useState(null);
   const state = useSyncExternalStore(subscribeMusic, musicSnapshot);
   const key = trackKey(file);
@@ -151,7 +151,8 @@ export function MusicPreview({ file, root, mime, onRestore }) {
   useEffect(() => {
     const entry = retainTrack(file, root, mime);
     let active = true;
-    void entry.load.then(() => {
+    void entry.load.then(async () => {
+      await beforePresent?.();
       if (!active) return;
       setLoaded(entry);
       primeMusic(entry);
@@ -161,7 +162,11 @@ export function MusicPreview({ file, root, mime, onRestore }) {
       releaseTrack(entry);
       leaveMusicPreview(entry);
     };
-  }, [key, mime, root]);
+  }, [key, mime, root, beforePresent]);
+
+  useEffect(() => {
+    if (track) onReady?.();
+  }, [track, onReady]);
 
   if (playback?.capsule) return h('p', { className: 'dwe-preview-hint' }, '单击一个文件进行预览');
   const minimize = onRestore && h(MusicAction, {

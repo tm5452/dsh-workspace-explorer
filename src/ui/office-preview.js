@@ -109,7 +109,7 @@ function officeAppearance(surface) {
   return { dark: darkTheme(), inset: surface ? Math.round(previewTopInset(surface)) : 0, outlineTop: start };
 }
 
-export function OfficePreview({ file, root, standalone, onQuote }) {
+export function OfficePreview({ file, root, standalone, onQuote, beforePresent, onReady }) {
   const surface = useRef(null);
   const frame = useRef(null);
   const [src, setSrc] = useState('');
@@ -135,24 +135,31 @@ export function OfficePreview({ file, root, standalone, onQuote }) {
     const controller = new AbortController();
     const { signal } = controller;
     let ticket;
-    void disks.officePreview(absolute, signal, root).then(source => {
+    void disks.officePreview(absolute, signal, root).then(async source => {
       if (signal.aborted) {
         void disks.releasePreview(source.ticket);
         return;
       }
       ticket = source.ticket;
+      await beforePresent?.();
+      if (signal.aborted) return;
       const url = new URL(officeAssetsPath, location.href);
       const { dark, inset, outlineTop } = officeAppearance(surface.current);
       url.search = new URLSearchParams({ file: 'viewer', ticket, name, theme: dark ? 'dark' : 'light', inset, outlineTop }).toString();
       setSrc(url.href);
-    }).catch(() => {
+    }).catch(async () => {
+      await beforePresent?.();
       if (!signal.aborted) setStatus('failed');
     });
     return () => {
       controller.abort();
       if (ticket) void disks.releasePreview(ticket);
     };
-  }, [absolute, name, root]);
+  }, [absolute, name, root, beforePresent]);
+
+  useEffect(() => {
+    if (status !== 'loading') onReady?.();
+  }, [status, onReady]);
 
   useLayoutEffect(() => {
     if (!src) return;

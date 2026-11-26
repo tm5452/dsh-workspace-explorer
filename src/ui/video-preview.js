@@ -28,7 +28,7 @@ function VideoPlaybackBar({ playback, seek, play }) {
     mediaButton(toggle, label, play, 'dwe-video-toggle')));
 }
 
-export function VideoPreview({ file, root, mime, onConfirm }) {
+export function VideoPreview({ file, root, mime, onConfirm, beforePresent, onReady }) {
   const player = useRef(null);
   const restorePlayback = useRef(null);
   const infoId = useId();
@@ -45,16 +45,19 @@ export function VideoPreview({ file, root, mime, onConfirm }) {
   useEffect(() => {
     const controller = new AbortController();
     const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(6000)]);
-    void makeThumbnail(file.absolute, mime, signal, root, true).then(image => {
+    void makeThumbnail(file.absolute, mime, signal, root, true, beforePresent).then(image => {
       if (!signal.aborted) setPoster(image);
-    }, () => {});
+    }).catch(async () => {
+      await beforePresent?.();
+      if (!controller.signal.aborted) onReady?.();
+    });
     if (file.size === undefined) {
       void disks.locate(file.absolute, controller.signal, root).then(info => {
         if (!controller.signal.aborted) setSize(info.size);
       }, () => {});
     }
     return () => controller.abort();
-  }, [file.absolute, file.size, root, mime]);
+  }, [file.absolute, file.size, root, mime, beforePresent, onReady]);
 
   useEffect(() => {
     if (!started) return;
@@ -157,7 +160,8 @@ export function VideoPreview({ file, root, mime, onConfirm }) {
         onLoad: event => {
           const image = event.currentTarget;
           if (!player.current?.videoWidth) fit(image.naturalWidth, image.naturalHeight);
-        } }),
+          onReady?.();
+        }, onError: onReady }),
       source && h('video', {
         ref: player, className: 'dwe-video-frame', src: source.url, playsInline: true, autoPlay: !useBuffer,
         'data-ready': ready || undefined,

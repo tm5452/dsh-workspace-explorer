@@ -10,7 +10,8 @@ function inPreviewSession(page, sessionId) {
 }
 
 export function previewPageAt(target, sessionId) {
-  const page = target?.closest?.(pageSelector);
+  const page = target?.closest?.(pageSelector)
+    ?? target?.closest?.('[data-dwe-file-preview-float]:not([data-dwe-float-maximized])')?.querySelector(pageSelector);
   return page && inPreviewSession(page, sessionId) ? page : null;
 }
 
@@ -40,7 +41,9 @@ export function createPreviewPageOverlay() {
       frame.style.inset = [top - bounds.top, bounds.right - right, bounds.bottom - bottom, left - bounds.left]
         .map(value => Math.max(0, value) + 'px').join(' ');
       frame.toggleAttribute('data-dwe-drop-active', active);
-      if (area.textContent !== label) area.textContent = label;
+      const hint = floating?.matches('[data-dwe-file-preview-float]:not([data-dwe-float-maximized])')
+        && label === '拖到此处预览文件' ? '拖到此处替换预览文件' : label;
+      if (area.textContent !== hint) area.textContent = hint;
       visibility.show(floating ?? document.body);
     },
     hide,

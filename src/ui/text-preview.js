@@ -167,7 +167,7 @@ function TextPreview({ text, eof, file, onReachEnd, surface, onQuote, firstLine,
   !eof && h('p', { className: 'dwe-text-limit' }, '… 仅显示文件开头，可在原生预览中继续查看')), quoteButton);
 }
 
-export function TextFilePreview({ file, root, standalone, onQuote }) {
+export function TextFilePreview({ file, root, standalone, onQuote, beforePresent, onReady }) {
   const surface = useRef(null);
   const [cursors, setCursors] = useState([null]);
   const [index, setIndex] = useState(0);
@@ -178,13 +178,17 @@ export function TextFilePreview({ file, root, standalone, onQuote }) {
   useEffect(() => {
     const controller = new AbortController();
     const { signal } = controller;
-    void disks.readTextWindow(file.absolute, signal, root, cursor, cursor ? undefined : file.line).then(data => {
-      if (!signal.aborted) setResult({ cursor, page: data });
-    }, () => {
-      if (!signal.aborted) setResult({ cursor, page: null });
-    });
+    void disks.readTextWindow(file.absolute, signal, root, cursor, cursor ? undefined : file.line)
+      .catch(() => null).then(async data => {
+        await beforePresent?.();
+        if (!signal.aborted) setResult({ cursor, page: data });
+      });
     return () => controller.abort();
-  }, [file.absolute, file.line, root, cursor]);
+  }, [file.absolute, file.line, root, cursor, beforePresent]);
+
+  useEffect(() => {
+    if (page || failed) onReady?.();
+  }, [page, failed, onReady]);
 
   function next() {
     if (!page?.next) return;

@@ -308,9 +308,7 @@ export function Explorer({
   const shownPreview = activePreview?.file;
   const shownRoot = underPath(shownPreview?.absolute, root) ? root : null;
   const canPreview = shownPreview && sessionId;
-  const doubleClickAction = useSyncExternalStore(preferences.subscribe, () => preferences.get().fileDoubleClick);
-  const preferredPreviewMode = doubleClickAction === 'preview' ? 'window'
-    : doubleClickAction === 'fullscreen' ? 'maximized' : 'sidebar';
+  const preferredPreviewMode = useSyncExternalStore(preferences.subscribe, () => preferences.get().inlinePreviewAction);
   const inlineSurface = previewOpen && activePreview ? surfaceFor(activePreview) : null;
   const previewLabel = useRef(null);
   useLayoutEffect(() => {
@@ -565,8 +563,16 @@ export function Explorer({
       if (action === 'native') void openWithSystem(destination);
       else if (action === 'reveal') void runAction('reveal', [entry]);
       else {
+        const file = { ...entry, absolute: destination };
+        if (action === 'shortcut') {
+          const label = samePath(shownPreview?.absolute, file.absolute) ? previewLabel.current : undefined;
+          if (!hasPreviewShortcut(file) && !openInlinePreviewAs(file, root, 'minimized', label)) {
+            setActionError('无法添加到侧列快捷键');
+          }
+          return;
+        }
         const open = action === 'sidebar' ? promotePreview : action === 'fullscreen' ? fullscreenPreview : floatPreview;
-        if (!open({ ...entry, absolute: destination }, root)) setActionError('无法打开文件预览');
+        if (!open(file, root)) setActionError('无法打开文件预览');
       }
     }
   }

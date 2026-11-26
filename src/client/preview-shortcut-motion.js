@@ -104,7 +104,7 @@ export function createPreviewShortcutMotion(getTarget, publish) {
       if (!source) return;
       remove(entry);
       const flight = { destination, holdSource, source, icon: cloneTabIcon(source.icon) };
-      // The docked tab can disappear before the shortcut's new position settles.
+      // Capture the file label before DockKit clears it from the sidebar.
       if (holdSource) flight.visual = mountOverlay(flight, source.name);
       flights.set(entry, flight);
       const deadline = performance.now() + 450;
