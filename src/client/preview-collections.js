@@ -135,14 +135,17 @@ export function createPreviewCollections(sidebar, openBeside, notify) {
     const { stack } = entry;
     if (stack.tabs.length) entry.keepEmptyFloat = false;
     try {
-      const tabs = stack.tabs.map(({ file, root }) => ({ file: { absolute: file.absolute,
-        origin: file.origin, originFolder: file.originFolder, originWorkspace: file.originWorkspace,
-        originOutsideFolder: file.originOutsideFolder }, root }));
-      const { maximized, restoreToSidebar, minimizedFromInline, shortcutOrder } = entry.window ?? {};
-      localStorage.setItem(entry.key, JSON.stringify({ tabs, floating: entry.shortcut?.floating,
-        window: { maximized, restoreToSidebar, minimizedFromInline, shortcutOrder } }));
+      if (entry.unpinned) localStorage.removeItem(entry.key);
+      else {
+        const tabs = stack.tabs.map(({ file, root }) => ({ file: { absolute: file.absolute,
+          origin: file.origin, originFolder: file.originFolder, originWorkspace: file.originWorkspace,
+          originOutsideFolder: file.originOutsideFolder }, root }));
+        const { maximized, restoreToSidebar, minimizedFromInline, shortcutOrder } = entry.window ?? {};
+        localStorage.setItem(entry.key, JSON.stringify({ tabs, floating: entry.shortcut?.floating,
+          window: { maximized, restoreToSidebar, minimizedFromInline, shortcutOrder } }));
+      }
       const index = new Set(shortcutAddresses(entry.group));
-      if (tabs.length) index.add(entry.address);
+      if (stack.tabs.length && !entry.unpinned) index.add(entry.address);
       else index.delete(entry.address);
       saveShortcutIndex(entry.group, [...index]);
     } catch { /* The current window still retains the tabs. */ }
@@ -269,9 +272,16 @@ export function createPreviewCollections(sidebar, openBeside, notify) {
       }
     },
     pin(entry, target) { change(entry, storeShortcut(entry.stack, target)); },
+    setPinned(entry, pinned) {
+      if (Boolean(entry.unpinned) === !pinned) return;
+      entry.unpinned = !pinned;
+      persist(entry);
+      publish();
+    },
     replace(entry, target) {
       const matching = entry.stack.tabs.filter(tab => samePath(tab.file.absolute, target.file.absolute));
       const stack = { ...entry.stack, tabs: matching };
+      if (!matching.length) entry.unpinned = false;
       entry.needsOpen = false;
       entry.checkFiles = false;
       change(entry, storeShortcut(stack, target));
@@ -281,10 +291,11 @@ export function createPreviewCollections(sidebar, openBeside, notify) {
       const { sessionId, tabId } = entry;
       const pending = { entry, sessionId };
       retiring.set(tabId, pending);
-      withdraw(entry, floating);
+      if (entry.unpinned) discard(entry);
+      else withdraw(entry, floating);
       sidebar.closeIn(sessionId, tabId);
       finishRetired(sessionId, find(sessionId), sidebar.mountedSurface?.()?.layout);
-      publish();
+      if (!entry.unpinned) publish();
     },
     afterPark(entry, callback) {
       for (const pending of retiring.values()) {
@@ -318,6 +329,10 @@ export function createPreviewCollections(sidebar, openBeside, notify) {
     },
     unbind(entry) {
       const id = entry.tabId;
+      if (entry.unpinned) {
+        discard(entry);
+        return id;
+      }
       entry.tabId = entry.sessionId = undefined;
       entry.dockSelected = false;
       if (entry.shortcut) entry.shortcut = { ...entry.shortcut, displayed: false };
@@ -369,7 +384,7 @@ export function createPreviewCollections(sidebar, openBeside, notify) {
       finally { reconciling = false; }
       const closed = allEntries.filter(entry => entry.sessionId === sessionId && entry.tabId && !live.has(entry));
       for (const entry of closed) {
-        if (entry.explicitClose || !entry.stack.tabs.length) discard(entry);
+        if (entry.explicitClose || entry.unpinned || !entry.stack.tabs.length) discard(entry);
         else withdraw(entry);
       }
       if (closed.length) publish();

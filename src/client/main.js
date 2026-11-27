@@ -114,6 +114,7 @@ function apply(ctx) {
       focus: entry => sidebar.focus(entry.tabId),
       close: closePreviewShortcut,
       persist: previews.persistWindow,
+      pin: entry => previews.setPinned(entry, true),
     });
     let sidebarPlacement;
     let placingPreview = false;
@@ -174,8 +175,8 @@ function apply(ctx) {
       saveTimer = setTimeout(saveLayout, 150);
     }
 
-    function notify() {
-      scheduleLayoutSave();
+    function notify(save = true) {
+      if (save) scheduleLayoutSave();
       for (const listener of listeners) listener();
     }
 
@@ -633,6 +634,7 @@ function apply(ctx) {
     function minimizeDockedPreview(entry) {
       const pane = previewPaneFor(entry);
       if (pane?.host !== 'dock' || pane.activeTabId !== entry.tabId) return;
+      previews.setPinned(entry, true);
       floatDock.retractPreviewToShortcut(entry);
       const previousPlacing = placingPreview;
       placingPreview = true;
@@ -834,13 +836,14 @@ function apply(ctx) {
 
     function estimateShortcutDropPreview(entry, destination, panel) {
       const pane = previewPaneFor(entry);
+      const container = panel?.parentElement;
       if (destination.mode === 'window') {
         const existing = pane?.rect;
         const { x, y, width, height } = previewFloatPlacement(existing ?? defaultPreviewFloatSize, destination, !existing);
-        return { floating: true, deferOpen: pane?.host !== 'float' || Boolean(entry.window?.maximized),
+        return { container, floating: true, movesSurface: pane?.host !== 'float' || Boolean(entry.window?.maximized),
           bounds: { left: x, top: y, width, height } };
       }
-      const deferOpen = pane?.host !== 'dock' || !sidebar.isExpanded()
+      const movesSurface = pane?.host !== 'dock' || !sidebar.isExpanded()
         || Boolean(destination.paneId && destination.paneId !== pane.id);
       const layout = sidebar.mountedSurface()?.layout;
       const active = layout?.nodes[layout.activePaneId];
@@ -851,7 +854,7 @@ function apply(ctx) {
         const stripBounds = node.querySelector('[data-dockkit-strip]')?.getBoundingClientRect();
         const top = Math.max(element.top, stripBounds?.bottom ?? element.top);
         if (element.width && element.bottom > top) {
-          return { deferOpen, bounds: { left: element.left, top, width: element.width, height: element.bottom - top }, stripBounds };
+          return { container, movesSurface, bounds: { left: element.left, top, width: element.width, height: element.bottom - top }, stripBounds };
         }
       }
       const root = document.documentElement;
@@ -861,7 +864,7 @@ function apply(ctx) {
       const top = rect?.top ?? 0;
       const strip = panel?.querySelector('[data-dockkit-strip]')?.getBoundingClientRect();
       const bottom = Math.max(top + 1, strip?.bottom ?? top + 34);
-      return { deferOpen, bounds: { left, top: bottom, width, height: Math.max(1, (rect?.bottom || root.clientHeight) - bottom) },
+      return { container, movesSurface, bounds: { left, top: bottom, width, height: Math.max(1, (rect?.bottom || root.clientHeight) - bottom) },
         stripBounds: { left, right: left + width, top, bottom, width, height: bottom - top } };
     }
 
@@ -878,15 +881,16 @@ function apply(ctx) {
       if (!panel || (!floating && !panel.hasAttribute('data-sidebar-right-open'))) return;
       const id = CSS.escape(pane.id);
       const element = panel.querySelector(floating ? '[data-dockkit-float="' + id + '"]' : '[data-dockkit-pane="' + id + '"]');
-      if (!element || element.closest('[hidden], [inert], [aria-hidden="true"]')) return;
+      if (!element || !entry.host?.isConnected || !element.contains(entry.host)
+          || entry.host.closest('[hidden], [inert], [aria-hidden="true"]')
+          || !entry.host.querySelector('[data-dwe-preview-page]')) return;
       if (floating && element.hasAttribute('data-dwe-float-maximized')) return;
-      const reveal = floating ? undefined : element.querySelector('div[data-sidebar-right-tab="' + CSS.escape(entry.tabId) + '"]');
       const rect = element.getBoundingClientRect();
       const strip = floating ? null : element.querySelector('[data-dockkit-strip="' + id + '"]');
       const stripBounds = strip?.getBoundingClientRect();
       const top = Math.max(rect.top, stripBounds?.bottom ?? rect.top);
       if (rect.bottom <= top || !rect.width) return;
-      return { element, reveal, floating, stripBounds, bounds: { left: rect.left, top, width: rect.width, height: rect.bottom - top } };
+      return { stripBounds, bounds: { left: rect.left, top, width: rect.width, height: rect.bottom - top } };
     }
 
     function openShortcutAt(entry, destination) {
@@ -1061,13 +1065,31 @@ function apply(ctx) {
 
     function openInlinePreviewAs(view, file, root, mode, shortcutSource) {
       const { sessionId, paneId, tabId } = view.target ?? {};
+      const minimized = mode === 'minimized';
+      if (minimized && sessionId && sessionId === presentedSession && sessionId === sidebar.mounted.getSnapshot()) {
+        const existing = findPreviewFile(sessionId, file);
+        if (existing) {
+          if (existing.unpinned) {
+            floatDock.flyShortcut(existing, shortcutSource, 'shortcut');
+            previews.setPinned(existing, true);
+          } else if (floatDock.shortcutFlightState(existing) !== 'inline') {
+            floatDock.retractShortcutToInline(existing, shortcutSource, () => {
+              if (!previews.entries().includes(existing)) return;
+              if (shortcutPresentation(existing)?.displayed
+                  || (existing.tabId && existing.sessionId !== sidebar.mounted.getSnapshot())) {
+                previews.setPinned(existing, false);
+              } else closePreviewShortcut(existing);
+            });
+          }
+          return true;
+        }
+      }
       const layout = sidebar.mountedSurface?.()?.layout;
       const splitPane = layout?.nodes[layout.rootId]?.kind === 'split' ? dockedPane(paneId) : undefined;
       if (mode === 'sidebar') {
         const target = normalizePreviewFile(view.withOrigin(file), root);
         return target && openPreviewTargets([target], sessionId, dockedPane(paneId));
       }
-      const minimized = mode === 'minimized';
       const opened = openPreviewFloat(sessionId, { file: view.withOrigin(file), root, fromInline: true,
         paneId: splitPane, maximized: mode === 'maximized', minimized, shortcutSource });
       if (opened && minimized) sidebar.focus(tabId);
@@ -1283,11 +1305,13 @@ function apply(ctx) {
       const surface = surfaceFor(item);
       let resolve;
       let barrier;
+      let start;
       if (!surface.ready) {
         barrier = new Promise(done => { resolve = done; });
         surface.presentation = barrier;
         previewSurfacesRevision++;
-        notify();
+        // Give the drop handler a chance to submit the compositor animation first.
+        start = setTimeout(() => notify(false), 0);
       }
       let transfer;
       return {
@@ -1296,17 +1320,16 @@ function apply(ctx) {
           transfer = { surface };
           entry.shortcutTransfer = transfer;
           parkSurface(surface);
-          notify();
+          notify(false);
         },
         finish() {
-          requestAnimationFrame(() => requestAnimationFrame(() => {
-            if (surface.presentation === barrier) surface.presentation = undefined;
-            if (transfer && entry.shortcutTransfer === transfer) {
-              entry.shortcutTransfer = undefined;
-              notify();
-            }
-            resolve?.();
-          }));
+          clearTimeout(start);
+          if (barrier && surface.presentation === barrier) surface.presentation = undefined;
+          if (transfer && entry.shortcutTransfer === transfer) {
+            entry.shortcutTransfer = undefined;
+            notify(false);
+          }
+          resolve?.();
         },
       };
     }
@@ -1665,7 +1688,10 @@ function apply(ctx) {
         previewPane: view.previewPane, saveLayout: view.save,
         surfaceFor, parkSurface, bindInlinePreview: view.bindInlinePreview,
         subscribePreviewShortcuts: subscribe,
-        hasPreviewShortcut: file => Boolean(findPreviewFile(sessionId, file)),
+        previewShortcutStatus: file => {
+          const entry = findPreviewFile(sessionId, file);
+          if (entry) return entry.unpinned ? 'unpinned' : 'pinned';
+        },
         claimInlineMedia: file => claimInlineMedia(view, file),
         openInlinePreviewAs: (file, root, mode, source) => openInlinePreviewAs(view, file, root, mode, source),
         openPreviewFiles: view.openPreviewFiles,
@@ -1797,7 +1823,7 @@ function apply(ctx) {
         if (sessionId && sidebar.mounted.getSnapshot() === sessionId) present(sessionId, cwd, tabScope);
       }, [sessionId, cwd, tabScope]);
       const shortcuts = currentGroup === undefined ? [] : entries
-        .filter(entry => entry.group === currentGroup && entry.stack.tabs.length)
+        .filter(entry => entry.group === currentGroup && entry.stack.tabs.length && !entry.unpinned)
         .map(entry => ({ entry, ...(shortcutPresentation(entry) ?? entry.shortcut) }));
       react.useLayoutEffect(() => {
         for (const { entry, floating, displayed } of shortcuts) {

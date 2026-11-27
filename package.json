@@ -1,6 +1,6 @@
 {
   "name": "dsh-workspace-explorer",
-  "version": "1.3.1",
+  "version": "1.3.2",
   "license": "MIT",
   "description": "File browsing, file operations and persistent preview in DeepSeek Harness Desktop on Windows, macOS and Linux.",
   "type": "module",

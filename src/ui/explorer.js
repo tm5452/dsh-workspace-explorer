@@ -222,7 +222,7 @@ export function Explorer({
   openDocument, openFolderTab,
   openPreviewFiles, refreshDirectories, updateRenamedPath, getInput,
   preferences, previewPane, promotePreview, floatPreview, fullscreenPreview, saveLayout,
-  surfaceFor, parkSurface, bindInlinePreview, openInlinePreviewAs, subscribePreviewShortcuts, hasPreviewShortcut, claimInlineMedia,
+  surfaceFor, parkSurface, bindInlinePreview, openInlinePreviewAs, subscribePreviewShortcuts, previewShortcutStatus, claimInlineMedia,
 }) {
   const workspace = localPath(cwd);
   const [localHistory, setLocalHistory] = useState(() => saved.state?.localHistory
@@ -302,9 +302,10 @@ export function Explorer({
       (sortByModified ? compareModified(a, b) : 0) || collator.compare(a.name, b.name) || collator.compare(a.relative, b.relative)),
   } : searchReady, [searchReady, sortByModified]);
   const selectedPreview = previewStack.tabs.find(tab => previewInScope(tab, root));
-  const shortcutAdded = useSyncExternalStore(subscribePreviewShortcuts,
-    () => Boolean(sessionId && selectedPreview && hasPreviewShortcut(selectedPreview.file)));
-  const activePreview = shortcutAdded && !selectedPreview.surface && isPlaybackFile(selectedPreview.file.name) ? undefined : selectedPreview;
+  const shortcutStatus = useSyncExternalStore(subscribePreviewShortcuts,
+    () => sessionId && selectedPreview ? previewShortcutStatus(selectedPreview.file) : undefined);
+  const shortcutAdded = shortcutStatus === 'pinned';
+  const activePreview = shortcutStatus && !selectedPreview.surface && isPlaybackFile(selectedPreview.file.name) ? undefined : selectedPreview;
   const shownPreview = activePreview?.file;
   const shownRoot = underPath(shownPreview?.absolute, root) ? root : null;
   const canPreview = shownPreview && sessionId;
@@ -556,7 +557,7 @@ export function Explorer({
     }
   }
 
-  function activate(entry, action = preferences.get().fileDoubleClick) {
+  function activate(entry, source, action = preferences.get().fileDoubleClick) {
     const destination = entry.path ?? joinPath(path, entry.name);
     if (entry.type === 'directory' || entry.type === 'drive') navigate(destination);
     else if (entry.type === 'file') {
@@ -565,8 +566,7 @@ export function Explorer({
       else {
         const file = { ...entry, absolute: destination };
         if (action === 'shortcut') {
-          const label = samePath(shownPreview?.absolute, file.absolute) ? previewLabel.current : undefined;
-          if (!hasPreviewShortcut(file) && !openInlinePreviewAs(file, root, 'minimized', label)) {
+          if (previewShortcutStatus(file) !== 'pinned' && !openInlinePreviewAs(file, root, 'minimized', source)) {
             setActionError('无法添加到侧列快捷键');
           }
           return;
@@ -778,7 +778,7 @@ export function Explorer({
     if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
     if (event.key === 'Enter') {
       event.preventDefault();
-      activate(entry, 'native');
+      activate(entry, undefined, 'native');
     }
   }
 
@@ -884,16 +884,16 @@ export function Explorer({
                     startDrag(event, composerItems(dragEntries(entry)), tab);
                   },
                   onClick: event => select(event, entry),
-                  onDoubleClick: event => { if (!selectionModifier(event) && !event.shiftKey) activate(entry); },
+                   onDoubleClick: event => { if (!selectionModifier(event) && !event.shiftKey) activate(entry, event.currentTarget); },
                   onKeyDown: event => rowKeyboard(event, entry),
                 },
-                h('span', { className: 'dwe-name' },
+                 h('span', { className: 'dwe-name' },
                   grid ? h(Thumbnail, {
                     path: entry.type === 'file' ? joinPath(path, entry.name) : null,
                     active: Boolean(sessionId), root,
                     fallback: fileIcon(entry.name, entry.type, 44),
                   }) : fileIcon(entry.name, entry.type, 16),
-                  h('span', null, entry.name)),
+                   h('span', { 'data-dwe-shortcut-file-name': '' }, entry.name)),
                 !grid && h('span', { className: 'dwe-meta dwe-type-column' }, entryType(entry)),
                 !grid && h('span', { className: 'dwe-meta' }, formatSize(entry.size))))))),
       h('footer', { className: 'dwe-status-bar', onContextMenu: showBarMenu },
@@ -952,11 +952,11 @@ function SearchResults({ found, select, activate, canDrag, contextMenu, drag }) 
           h('button', {
             type: 'button', className: 'dwe-row dwe-search-hit', title: match.path, onClick: () => select(match),
             onDoubleClick: event => {
-              if (!selectionModifier(event) && !event.shiftKey) activate({ ...match, type: 'file' });
+              if (!selectionModifier(event) && !event.shiftKey) activate({ ...match, type: 'file' }, event.currentTarget);
             },
             draggable: canDrag, onDragStart: event => drag(event, match),
           }, fileIcon(match.name, 'file'),
-          h('span', null, h('span', null, match.name),
+           h('span', null, h('span', { 'data-dwe-shortcut-file-name': '' }, match.name),
             h('small', null, match.relative.slice(0, -(match.name.length + 1)) || '工作区根目录')))))));
 }
 

@@ -3,7 +3,7 @@ import { createPreviewShortcutMotion } from './preview-shortcut-motion.js';
 const motionAttribute = 'data-dwe-float-motion';
 const collapsingAttribute = 'data-dwe-float-collapsing';
 
-export function createPreviewFloatDock({ focus, close, persist }) {
+export function createPreviewFloatDock({ focus, close, persist, pin }) {
   const windows = new Map();
   const slots = new WeakMap();
   const listeners = new Set();
@@ -69,12 +69,13 @@ export function createPreviewFloatDock({ focus, close, persist }) {
   }
 
   function canMinimize(window) {
-    return window && window.slot && window.entry.window?.dockOrder === undefined;
+    return window && (window.slot || window.entry.unpinned) && window.entry.window?.dockOrder === undefined;
   }
 
   function minimize(window) {
     const { element, entry } = window;
     const source = element.getBoundingClientRect();
+    if (entry.unpinned) pin(entry);
     cancelMotion(window);
     element.setAttribute(motionAttribute, '');
     window.slot?.setAttribute(collapsingAttribute, '');
@@ -99,6 +100,10 @@ export function createPreviewFloatDock({ focus, close, persist }) {
     },
     cancelShortcutRelease,
     flyShortcut: shortcutMotion.start,
+    retractShortcutToInline(entry, label, finish) {
+      const button = slots.get(entry)?.querySelector('.dwe-float-dock-button');
+      if (!shortcutMotion.returnToInline(entry, button, label, finish)) finish();
+    },
     retractPreviewToShortcut(entry) {
       const label = dockedLabel(entry);
       shortcutMotion.cancel(entry);
@@ -157,6 +162,7 @@ export function createPreviewFloatDock({ focus, close, persist }) {
     setShortcutSlot(entry, slot) {
       if (slot) {
         slots.set(entry, slot);
+        shortcutMotion.targetMounted(entry);
         const shortcutOrder = entry.window?.shortcutOrder ?? ++order;
         order = Math.max(order, shortcutOrder);
         if (entry.window?.shortcutOrder === undefined) {

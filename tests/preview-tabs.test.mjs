@@ -131,6 +131,54 @@ test('returning to the originating browser checks its path and workspace mode', 
   assert.equal(canReturnToBrowser(startedScoped, { ...view, path: 'C:\\Another' }), false);
 });
 
+test('unpinning preserves the active native viewer and removes its saved shortcut', t => {
+  const values = new Map();
+  const previous = globalThis.localStorage;
+  globalThis.localStorage = {
+    getItem: key => values.get(key), setItem: (key, value) => values.set(key, value),
+    removeItem: key => values.delete(key),
+  };
+  t.after(() => {
+    if (previous === undefined) delete globalThis.localStorage;
+    else globalThis.localStorage = previous;
+  });
+
+  const sessionId = 'session';
+  const group = 'group';
+  let tabs = [];
+  const sidebar = {
+    mounted: { getSnapshot: () => sessionId },
+    openTabs: { getSnapshot: () => tabs },
+    closeIn: (_session, id) => { tabs = tabs.filter(tab => tab.id !== id); },
+  };
+  const openNative = (id, { kind }) => tabs.push({ id, contentId: id, kind, sessionId });
+  const collections = createPreviewCollections(sidebar, openNative, () => {});
+  const entry = collections.record(group, sessionId, newCollectionAddress());
+  const other = collections.record(group, sessionId, newCollectionAddress());
+  const surface = {};
+  assert.ok(collections.open(entry, sessionId, [{ ...normalizePreviewFile(file('one.pdf')), surface }], undefined, { focus: false }));
+  collections.pin(other, normalizePreviewFile(file('two.pdf')));
+
+  const { tabId } = entry;
+  collections.setPinned(entry, false);
+  assert.equal(entry.tabId, tabId);
+  assert.equal(entry.stack.tabs[0].surface, surface);
+  assert.equal(tabs.length, 1);
+
+  const restored = createPreviewCollections(sidebar, openNative, () => {});
+  restored.restoreShortcuts(group, sessionId);
+  assert.deepEqual(restored.entries().map(item => item.address), [other.address]);
+  collections.setPinned(entry, true);
+  assert.ok(values.has(entry.key));
+  assert.equal(entry.stack.tabs[0].surface, surface);
+
+  collections.setPinned(entry, false);
+  collections.park(entry);
+  assert.deepEqual(collections.entries(), [other]);
+  assert.equal(tabs.length, 0);
+  assert.equal(values.has(entry.key), false);
+});
+
 test('transferring a file removes the source item and carries its original viewer into the destination', () => {
   const collections = createPreviewCollections({}, () => {}, () => {});
   const source = collections.record('group');

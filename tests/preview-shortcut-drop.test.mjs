@@ -67,13 +67,16 @@ test('the spring keeps the release velocity as the preview grows and settles on 
   const target = { left: 430, top: 170, width: 280, height: 170 };
   const center = frame => frame.left + frame.width / 2;
   const flight = createShortcutSpring(source, target, { x: -2, y: .2 });
-  const { frames, duration } = flight.keyframes();
+  const { frames, duration, offsets } = flight.keyframes();
   const early = flight.sample(.01).rect;
   assert.ok(Math.abs((center(early) - center(source)) / .01 - (-2)) < .01);
   assert.deepEqual(frames[0], source);
   assert.ok(center(frames[1]) < center(source));
   assert.ok(frames[1].width > source.width && frames[1].height > source.height);
   assert.deepEqual(frames.at(-1), target);
+  assert.equal(offsets[0], 0);
+  assert.equal(offsets.at(-1), 1);
+  assert.ok(offsets.every((offset, i) => i === 0 || offset > offsets[i - 1]));
   assert.ok(Math.abs(center(frames.at(-2)) - center(target)) < .5);
   assert.ok(target.width - frames.at(-2).width < .5);
   assert.ok(duration > 200 && duration < 900);
@@ -89,18 +92,16 @@ test('a stationary shortcut expands toward the dock without overshooting its dim
   assert.ok(frames.every(({ width, height }) => width <= target.width && height <= target.height));
 });
 
-test('Motion keeps position and velocity when the host commits different bounds', () => {
+test('the compositor keyframes preserve the initial heading on both axes', () => {
   const source = { left: 400, top: 190, width: 56, height: 56 };
-  const predicted = { left: 620, top: 40, width: 580, height: 760 };
-  const actual = { left: 700, top: 56, width: 500, height: 744 };
-  const flight = createShortcutSpring(source, predicted, { x: 1.4, y: -.3 });
-  const before = flight.sample(40).rect;
-  const earlier = flight.sample(39.99).rect;
-  flight.retarget(actual, 40);
-  assert.deepEqual(flight.sample(0).rect, before);
-  const next = flight.sample(.01).rect;
-  for (const field of ['left', 'top', 'width', 'height']) {
-    assert.ok(Math.abs((before[field] - earlier[field]) / .01 - (next[field] - before[field]) / .01) < .01);
-  }
-  assert.deepEqual(flight.keyframes().frames.at(-1), actual);
+  const target = { left: 338, top: 34, width: 500, height: 744 };
+  const { frames, duration, offsets } = createShortcutSpring(source, target, { x: -2, y: -.8 }).keyframes();
+  const [, firstMove] = frames;
+  const elapsed = duration * offsets[1];
+  const dx = firstMove.left + firstMove.width / 2 - (source.left + source.width / 2);
+  const dy = firstMove.top + firstMove.height / 2 - (source.top + source.height / 2);
+  assert.ok(elapsed < 5);
+  assert.ok(dx < 0 && dy < 0);
+  assert.ok(frames.length < 20);
+  assert.deepEqual(frames.at(-1), target);
 });

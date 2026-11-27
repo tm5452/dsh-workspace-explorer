@@ -2,8 +2,8 @@ import { spring } from '../vendor/motion-spring/index.js';
 
 const sampleWindow = 55;
 const maxSpeed = 3.5;
-const maxFrameStep = 24;
-const openAfter = 116;
+const flightTimes = [0, 2, 8, 16, 28, 46, 70, 100, 140, 190, 245, 300, 350, 400, 470, 560, 680];
+const handoffDuration = 160;
 
 export function shortcutReleaseImpulse({ x, y }) {
   const speed = Math.hypot(x, y);
@@ -40,246 +40,188 @@ export function createShortcutSpring(source, target, velocity) {
     keyframes: [value, goal[index]], velocity: velocities[index],
     stiffness: 900, damping: index < 2 ? 55 : 60, mass: 1, restDelta: .18, restSpeed: 9,
   }));
-  let destination = target;
+
   function sample(time) {
     const values = axes.map(axis => axis.next(time));
     const [x, y, width, height] = values.map(value => value.value);
     return { rect: { left: x - width / 2, top: y - height / 2, width, height },
       done: values.every(value => value.done) };
   }
+
   return {
     sample,
-    retarget(next, time) {
-      const end = rectChannels(next);
-      for (const [index, axis] of axes.entries()) {
-        axis.retarget([axis.next(time).value, end[index]], axis.velocity(time));
-      }
-      destination = next;
-    },
     keyframes() {
       const frames = [];
-      const step = 1000 / 120;
-      for (let time = 0; time <= 900; time += step) {
+      let duration = 0;
+      // Sample once at uneven intervals to capture the initial impulse and settle.
+      for (const time of flightTimes) {
         const { rect, done } = sample(time);
-        frames.push(done ? destination : rect);
-        if (done && frames.length > 1) break;
+        duration = time;
+        const atRest = (done && time >= 245) || time === flightTimes.at(-1);
+        frames.push(atRest ? target : rect);
+        if (atRest) break;
       }
-      return { frames, duration: step * (frames.length - 1) };
+      return { frames, duration, offsets: flightTimes.slice(0, frames.length).map(time => time / duration) };
     },
   };
 }
 
-function badgeIcon(element) {
-  const source = element.querySelector('svg, img');
-  if (!source) return;
-  const rect = source.getBoundingClientRect();
-  source.style.width = rect.width + 'px';
-  source.style.height = rect.height + 'px';
-  return source;
+function panelTransform(rect, base) {
+  return translate(rect.left, rect.top) + ' scale(' + rect.width / base.width + ', ' + rect.height / base.height + ')';
 }
 
-function mountFlight(source, styleElement, icon) {
-  const stage = document.createElement('div');
-  stage.className = 'dwe-shortcut-release-stage';
-  stage.setAttribute('aria-hidden', 'true');
-  const overlay = document.createElement('div');
-  overlay.className = 'dwe-shortcut-release';
-  overlay.style.width = source.width + 'px';
-  overlay.style.height = source.height + 'px';
-  overlay.style.transform = translate(source.left, source.top);
-
-  const panel = document.createElement('div');
-  panel.className = 'dwe-shortcut-release-panel';
-  const style = getComputedStyle(styleElement);
-  const radius = (parseFloat(style.borderTopLeftRadius) || 0) * source.width / styleElement.offsetWidth;
-  Object.assign(panel.style, {
-    borderRadius: radius + 'px',
-    backgroundColor: style.backgroundColor,
-    borderColor: style.borderTopColor,
-    boxShadow: style.boxShadow,
-  });
-  overlay.append(panel);
-  if (icon) overlay.append(icon);
-  stage.append(overlay);
-  document.body.append(stage);
-  return { stage, overlay, panel, icon, radius };
+function iconTransform(rect, scale) {
+  const [x, y] = rectChannels(rect);
+  return translate(x, y) + ' translate(-50%, -50%) scale(' + scale + ')';
 }
 
 function protectStrip(stage, strip) {
-  if (!strip?.width || !strip.height) return;
+  if (!strip?.width || !strip.height) {
+    stage.style.removeProperty('clip-path');
+    return;
+  }
   const { left, top, right, bottom } = strip;
   const hole = left + 'px ' + top + 'px, ' + right + 'px ' + top + 'px, '
     + right + 'px ' + bottom + 'px, ' + left + 'px ' + bottom + 'px, ' + left + 'px ' + top + 'px';
   stage.style.clipPath = 'polygon(evenodd, 0 0, 100% 0, 100% 100%, 0 100%, 0 0, ' + hole + ')';
 }
 
-function morph(visual, base, target, frames, duration) {
-  const { stage, overlay, panel, icon, radius: startRadius } = visual;
-  const bounds = target.bounds;
-  const targetRadius = target.element
-    ? parseFloat(getComputedStyle(target.element).borderTopLeftRadius) || 0 : target.floating ? 15 : 0;
-  const motion = [];
-  const size = [];
-  const windowMotion = [];
-  const pending = !target.element;
+function animateFlight(face, source, target, impulse) {
+  const base = target.bounds;
+  const icon = face.querySelector('svg, img');
+  const iconWidth = icon?.getBoundingClientRect().width;
+  const stage = document.createElement('div');
+  stage.className = 'dwe-shortcut-release-stage';
+  stage.setAttribute('aria-hidden', 'true');
+  const panel = document.createElement('div');
+  panel.className = 'dwe-shortcut-release-panel';
+  panel.toggleAttribute('data-dwe-window', Boolean(target.floating));
+  panel.style.width = base.width + 'px';
+  panel.style.height = base.height + 'px';
+  panel.style.transform = panelTransform(base, base);
+  const iconSize = 40;
+  const initialScale = (iconWidth || iconSize) / iconSize;
+  if (icon) {
+    icon.classList.add('dwe-shortcut-release-icon');
+    icon.style.transform = iconTransform(base, 1);
+  }
   protectStrip(stage, target.stripBounds);
-  for (const { left, top, width, height } of frames) {
-    const scaleX = width / base.width;
-    const scaleY = height / base.height;
-    const progress = Math.max(0, Math.min(1, (width - base.width) / (bounds.width - base.width || 1)));
-    const radius = startRadius + (targetRadius - startRadius) * progress;
-    motion.push({ transform: translate(left + (width - base.width) / 2, top + (height - base.height) / 2) });
-    size.push({ transform: 'scale(' + scaleX + ', ' + scaleY + ')',
-      borderRadius: radius / scaleX + 'px / ' + radius / scaleY + 'px' });
-    if (target.floating && !pending) {
-      windowMotion.push({ transformOrigin: '0 0',
-        transform: translate(left - bounds.left, top - bounds.top) + ' scale(' + width / bounds.width + ', ' + height / bounds.height + ')' });
-    }
-  }
+  stage.append(panel);
+  if (icon) stage.append(icon);
+  document.body.append(stage);
 
-  const animations = [];
-  function play(element, keyframes) {
-    if (!element) return;
-    const animation = element.animate(keyframes, { duration, fill: 'both' });
-    animation.pause();
-    animation.currentTime = 0;
-    animations.push(animation);
-  }
+  const { frames, duration, offsets } = createShortcutSpring(source, base, impulse).keyframes();
+  const options = { duration, fill: 'backwards' };
+  const launch = panel.animate(frames.map((rect, i) => ({
+    offset: offsets[i], transform: panelTransform(rect, base),
+  })), options);
+  const iconLaunch = icon?.animate(frames.map((rect, i) => ({
+    offset: offsets[i], transform: iconTransform(rect, initialScale + (1 - initialScale) * Math.min(1, offsets[i] * 2)),
+  })), options);
 
-  play(overlay, motion);
-  play(panel, size);
-  const playback = {
-    advance(time) {
-      for (const animation of animations) animation.currentTime = Math.min(time, duration);
-    },
-    cancel() {
-      for (const animation of animations) animation.cancel();
+  return {
+    stage, launch, iconLaunch,
+    fade(target) {
+      const bounds = target?.bounds ?? base;
+      if (target) protectStrip(stage, target.stripBounds);
+      const handoff = { duration: handoffDuration, easing: 'ease-out', fill: 'forwards' };
+      return [
+        panel.animate([
+          { transform: panelTransform(base, base), opacity: 1 },
+          { transform: panelTransform(bounds, base), opacity: 0 },
+        ], handoff),
+        icon?.animate([
+          { transform: iconTransform(base, 1), opacity: 1 },
+          { transform: iconTransform(bounds, 1), opacity: 0 },
+        ], handoff),
+      ];
     },
   };
-  if (pending) return playback;
-  play(icon, [{ opacity: 1 }, { opacity: 0, offset: .48 }, { opacity: 0 }]);
-  play(overlay, [
-    { opacity: 1 }, { opacity: 1, offset: target.floating ? .25 : .72 },
-    { opacity: 0, offset: target.floating ? .68 : 1 }, { opacity: 0 },
-  ]);
-  if (target.floating) {
-    // Identity at rest leaves the actual window and its native coordinates in charge.
-    play(target.element, windowMotion);
-  }
-  play(target.floating ? target.element : target.reveal,
-    [{ opacity: 0 }, { opacity: 0, offset: target.floating ? .18 : .5 }, { opacity: 1 }]);
-  return playback;
-}
-
-function sameBounds(a, b) {
-  return a && ['left', 'top', 'width', 'height'].every(property => Math.abs(a[property] - b[property]) < .5);
 }
 
 export function releaseShortcut(badge, face, destination, velocity, open, locate, estimate, finished) {
-  const source = face.getBoundingClientRect();
-  if (!source.width || !source.height) {
-    badge.dispose();
-    try { open(destination); } finally { finished(); }
-    return;
+  let visual;
+  let observer;
+  let probe;
+  let deadline;
+  let fading;
+  let done = false;
+
+  function stopObserving() {
+    observer?.disconnect();
+    clearTimeout(probe);
+    clearTimeout(deadline);
   }
-  const visual = mountFlight(source, face, badgeIcon(face));
-  badge.dispose();
+
+  function cancel() {
+    if (done) return;
+    done = true;
+    stopObserving();
+    visual?.launch.cancel();
+    visual?.iconLaunch?.cancel();
+    for (const animation of fading ?? []) animation?.cancel();
+    visual?.stage.remove();
+    badge.dispose();
+    finished();
+  }
 
   const impulse = shortcutReleaseImpulse(velocity);
   const landing = destination.mode === 'window'
     ? { ...destination, x: destination.x + impulse.x * 90, y: destination.y + impulse.y * 90 }
     : destination;
-  const anticipated = estimate(landing);
-  const flight = createShortcutSpring(source, anticipated.bounds, impulse);
-  const launch = flight.keyframes();
-  const initial = morph(visual, source, anticipated, launch.frames, launch.duration);
-  const nativeOpenTime = anticipated.deferOpen ? launch.duration : Math.min(openAfter, launch.duration);
-  let frame;
-  let settled;
-  let ending;
-  let hold;
-  let hidden;
-  let lastFrame;
-  let launchTime = 0;
-  let settledTime = 0;
-  let settledDuration;
-  let opened = false;
-  let landingPainted = false;
-  let deadline;
-  let previous;
-  let done = false;
-  function cancel() {
-    if (done) return;
-    done = true;
-    cancelAnimationFrame(frame);
-    hold?.cancel();
-    ending?.cancel();
-    initial.cancel();
-    settled?.cancel();
-    visual.stage.remove();
-    finished();
-  }
+  try {
+    const source = face.getBoundingClientRect();
+    const anticipated = estimate(landing);
+    if (!source.width || !source.height || !anticipated.bounds.width || !anticipated.bounds.height
+        || matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      try { open(landing, anticipated.movesSurface); } finally { cancel(); }
+      return cancel;
+    }
+    visual = animateFlight(face, source, anticipated, impulse);
+    badge.dispose();
 
-  function tick(now) {
-    // Opening a heavy preview can stall the renderer. Resume from the last displayed spring frame.
-    const step = lastFrame === undefined ? 0 : Math.min(maxFrameStep, Math.max(0, now - lastFrame));
-    lastFrame = now;
-    if (settled) {
-      settledTime += step;
-      settled.advance(settledTime);
-      if (settledTime >= settledDuration) {
-        cancel();
-        return;
-      }
-      frame = requestAnimationFrame(tick);
-      return;
+    function reveal(target) {
+      if (done) return;
+      stopObserving();
+      fading = visual.fade(target);
+      fading[0].onfinish = cancel;
     }
 
-    launchTime = Math.min(launchTime + step, launch.duration);
-    initial.advance(launchTime);
-    if (!opened && launchTime >= nativeOpenTime) {
-      if (anticipated.deferOpen && !landingPainted) {
-        // Finish the moving layer before DockKit replaces the pane and its header.
-        landingPainted = true;
-        frame = requestAnimationFrame(tick);
-        return;
-      }
+    function checkTarget() {
+      const target = locate(landing);
+      if (target) reveal(target);
+      return Boolean(target);
+    }
+
+    visual.launch.onfinish = () => {
       try {
-        opened = open(landing, anticipated.deferOpen);
-      } finally {
-        if (!opened) cancel();
+        const opened = open(landing, anticipated.movesSurface);
+        if (done) return;
+        if (!opened) {
+          cancel();
+          return;
+        }
+        // DockKit may attach the real window after the open call returns.
+        // Keep the landed placeholder until that commit, including when the sidebar was collapsed.
+        probe = setTimeout(() => {
+          if (checkTarget()) return;
+          observer = new MutationObserver(checkTarget);
+          observer.observe(anticipated.container?.isConnected ? anticipated.container : document.body, {
+            childList: true, subtree: true, attributes: true,
+            attributeFilter: ['hidden', 'inert', 'aria-hidden', 'data-sidebar-right-open', 'data-dwe-preview-page',
+              'data-dwe-float-maximized', 'data-dwe-float-minimized'],
+          });
+          deadline = setTimeout(() => reveal(), 650);
+        }, 0);
+      } catch (error) {
+        cancel();
+        throw error;
       }
-      if (!opened) return;
-      deadline = performance.now() + 650;
-    }
-
-    if (opened) {
-      const target = locate();
-      const ready = target?.bounds?.width > 0 && target.bounds.height > 0;
-      const reveal = ready && (target.floating ? target.element : target.reveal);
-      if (reveal && hidden !== reveal) {
-        hold?.cancel();
-        hold = reveal.animate([{ opacity: 0 }, { opacity: 0 }], { duration: 1, fill: 'both' });
-        hidden = reveal;
-      }
-      const stable = ready && previous?.element === target.element && sameBounds(previous.bounds, target.bounds);
-      if (stable || (ready && now >= deadline)) {
-        flight.retarget(target.bounds, launchTime);
-        const { frames, duration } = flight.keyframes();
-        settledDuration = anticipated.deferOpen ? Math.max(145, duration) : duration;
-        settled = morph(visual, source, target, frames, settledDuration);
-        initial.cancel();
-        hold?.cancel();
-      } else if (now >= deadline) {
-        ending = visual.stage.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 150, fill: 'both' });
-        ending.onfinish = cancel;
-        return;
-      }
-      previous = target;
-    }
-    frame = requestAnimationFrame(tick);
+    };
+  } catch (error) {
+    cancel();
+    throw error;
   }
 
-  frame = requestAnimationFrame(tick);
   return cancel;
 }

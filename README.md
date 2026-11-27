@@ -2,9 +2,9 @@
 
 在 DeepSeek Harness 桌面端浏览本机文件、整理资料和预览文档。**适配 Windows、macOS 和兼容的 Linux 桌面宿主，支持在独立窗口中预览文件。** 你可以继续在文件列表里查找、复制或整理文件，同时在另一栏或浮窗里阅读文档、看图或播放媒体。
 
-[下载 1.3.1](https://github.com/tm5452/dsh-workspace-explorer/releases/tag/v1.3.1) · [版本记录](CHANGELOG.md)
+[下载 1.3.2](https://github.com/tm5452/dsh-workspace-explorer/releases/tag/v1.3.2) · [版本记录](CHANGELOG.md)
 
-1.3.1 修复了关闭最后一个标签页后右侧栏可能失效的问题，并新增侧列快捷键拖放。上下拖动排序，向左打开小窗，向右打开侧栏。分屏时可将预览拖到指定窗格。
+1.3.2 优化了侧列快捷键的拖动性能和操作逻辑。拖放展开与文件读取同时开始。悬停可查看整列文件名并关闭单项，关闭后剩余项目平滑补位。
 
 ## 文件预览方式
 
@@ -61,7 +61,7 @@
 
 需要能加载本插件的 **DeepSeek Harness 桌面宿主**。Windows、macOS 和兼容的 Linux 桌面宿主使用同一份安装包。磁盘和目录访问遵循运行 DSH 的账户权限。原生文件操作使用各系统的文件服务，Linux 上部分宗卷的回收站操作需要系统提供 `gio`。
 
-在 DSH 的「插件 → 添加插件」输入 `dsh-workspace-explorer`，或从 [GitHub Releases](https://github.com/tm5452/dsh-workspace-explorer/releases/tag/v1.3.1) 下载 `.tgz` 后填入本地路径。用命令行也可以安装：
+在 DSH 的「插件 → 添加插件」输入 `dsh-workspace-explorer`，或从 [GitHub Releases](https://github.com/tm5452/dsh-workspace-explorer/releases/tag/v1.3.2) 下载 `.tgz` 后填入本地路径。用命令行也可以安装：
 
 ```sh
 dsh plugin --profile web add dsh-workspace-explorer

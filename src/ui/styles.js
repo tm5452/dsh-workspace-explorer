@@ -12,6 +12,7 @@ body {
   --dwe-file-shortcut-background: #fff;
   --dwe-file-shortcut-marker: #c7cbd4;
   --dwe-file-shortcut-active: #e1e3e8;
+  --dwe-preview-loading-surface: #fff;
   --dwe-file-shortcut-border: #e0e0e0;
   --dwe-floating-tool-fill: 20%;
   --dwe-floating-tool-blur: 3px;
@@ -65,6 +66,7 @@ body[data-ds-dark-theme] {
   --dwe-file-shortcut-background: #222225;
   --dwe-file-shortcut-marker: #676b74;
   --dwe-file-shortcut-active: #35373e;
+  --dwe-preview-loading-surface: #222225;
   --dwe-file-shortcut-border: #39393c;
   --dwe-preview-tool-color: var(--dsw-alias-label-primary, #eee);
   --dwe-file-menu-surface: #303136;
@@ -176,7 +178,7 @@ body[data-ds-dark-theme] {
 .dwe-float-dock-drag {
   width: var(--dwe-tool-size); height: var(--dwe-tool-size);
   background: none; box-shadow: none;
-  transform: translate3d(max(0px, calc(var(--dwe-drag-x) - 26px)), max(0px, calc(var(--dwe-drag-y) - 26px)), 0);
+  will-change: transform;
 }
 .dwe-float-dock-drag-face {
   display: grid; place-items: center; box-sizing: border-box; width: 100%; height: 100%;
@@ -203,14 +205,13 @@ body[data-ds-dark-theme] {
 .dwe-shortcut-release-stage {
   position: fixed; inset: 0; z-index: 2147483647; pointer-events: none;
 }
-.dwe-shortcut-release {
-  position: fixed; inset: 0 auto auto 0; z-index: 2147483647;
-  display: grid; place-items: center; pointer-events: none;
+.dwe-shortcut-release-panel, .dwe-shortcut-release-icon {
+  position: absolute; top: 0; left: 0; transform-origin: center;
+  will-change: transform, opacity;
 }
-.dwe-shortcut-release-panel {
-  position: absolute; inset: 0; box-sizing: border-box; border: 1px solid transparent;
-}
-.dwe-shortcut-release > svg { position: relative; }
+.dwe-shortcut-release-panel { background: var(--dwe-preview-loading-surface); transform-origin: 0 0; }
+.dwe-shortcut-release-panel[data-dwe-window] { border-radius: 15px; }
+.dwe-shortcut-release-icon { width: 40px; height: 40px; object-fit: contain; }
 [data-dwe-shortcut-drop] { outline: 2px solid var(--dwe-accent); outline-offset: -2px; }
 .dwe-float-dock-drag[data-opened] > .dwe-float-dock-drag-face { background-color: var(--dwe-file-shortcut-active); }
 [data-dwe-shortcut-flight-target] { visibility: hidden; }
@@ -220,6 +221,11 @@ body[data-ds-dark-theme] {
 }
 .dwe-preview-shortcut-flight > * { position: absolute; top: 0; left: 0; }
 .dwe-preview-shortcut-flight > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dwe-preview-file-shortcut-flight { overflow: visible; outline: 0; }
+.dwe-preview-file-shortcut-flight > * { transform-origin: 0 0; }
+.dwe-preview-file-shortcut-flight > div {
+  box-sizing: border-box; outline: 1px solid transparent; outline-offset: -1px;
+}
 :is([data-dwe-mouse-gesture-tracking], [data-dwe-preview-dragging],
   [data-dwe-explorer-file-drag], [data-dwe-desktop-preview-drag], [data-dwe-conversation-file-drag])
   :is(iframe, webview, object, embed) { pointer-events: none !important; }
@@ -450,10 +456,11 @@ nav[class$="_frame"]:has(> div > div[class$="_marks"]) > [role="tooltip"] {
 }
 .dwe-sidebar-header-controls > button, .dwe-sidebar-header-controls .dwe-extension-button,
 .dwe-float-dock-button, .dwe-float-dock-add {
+  --dwe-floating-tool-background: color-mix(in srgb, var(--dwe-tool-state-background, var(--dwe-tool-background)) var(--dwe-floating-tool-fill), transparent);
   display: grid; place-items: center; flex: none; box-sizing: border-box; padding: 0;
   inline-size: var(--dwe-tool-size); block-size: var(--dwe-tool-size);
   border: 1px solid var(--dwe-line); border-radius: var(--dwe-ui-radius);
-  background: color-mix(in srgb, var(--dwe-tool-state-background, var(--dwe-tool-background)) var(--dwe-floating-tool-fill), transparent);
+  background: var(--dwe-floating-tool-background);
   backdrop-filter: blur(var(--dwe-floating-tool-blur));
   box-shadow: var(--dwe-floating-tool-shadow); color: #64696E; cursor: pointer;
 }
@@ -475,7 +482,7 @@ body[data-ds-dark-theme] .dwe-sidebar-header-controls button:disabled { color: #
 html[data-windows-titlebar]:not([data-fullscreen]) :is([data-dwe-file-preview-float], .dwe-sidebar-header-controls) {
   --dwe-window-content-top: var(--dsh-windows-titlebar-height, 36px);
 }
-.dwe-preview-float-dock { display: grid; gap: 3px; }
+.dwe-preview-float-dock { display: grid; width: 100%; gap: 3px; }
 .dwe-preview-float-dock:empty { display: none; }
 .dwe-float-dock-add { opacity: 0; pointer-events: none; -webkit-app-region: no-drag; }
 :is(.dwe-sidebar-header-controls, .dwe-preview-float-dock):hover .dwe-float-dock-add,
@@ -485,39 +492,80 @@ html[data-windows-titlebar]:not([data-fullscreen]) :is([data-dwe-file-preview-fl
 .dwe-float-dock-add:focus-visible { outline: 2px solid var(--dwe-accent); outline-offset: -2px; }
 .dwe-float-dock-slot {
   --dwe-float-label-gap: 6px;
+  --dwe-float-label-close-width: 26px;
+  --dwe-float-slot-hover-scale: 1.1;
+  --dwe-float-shortcut-surface: var(--dwe-file-shortcut-background);
   width: var(--dwe-tool-size); height: var(--dwe-tool-size); position: relative;
+}
+.dwe-float-dock-slot:is([data-dwe-float-collapsing], :has(> .dwe-float-dock-button:is([aria-pressed="true"], [data-dwe-shortcut-retracting]))) {
+  --dwe-float-shortcut-surface: var(--dwe-file-shortcut-active);
 }
 .dwe-float-dock-button {
   --dwe-file-shortcut-current-marker: var(--dwe-file-shortcut-marker);
   --dwe-file-shortcut-stroke: 1.35px;
-  position: absolute; right: 0; top: 0; display: grid; place-items: center;
+  position: absolute; z-index: 1; right: 0; top: 0; display: grid; place-items: center;
   width: var(--dwe-tool-size); overflow: hidden;
-  background-color: var(--dwe-file-shortcut-background); border-color: var(--dwe-file-shortcut-border);
+  background-color: var(--dwe-float-shortcut-surface); border-color: var(--dwe-file-shortcut-border);
+  backdrop-filter: none;
   touch-action: none; -webkit-app-region: no-drag;
 }
-.dwe-float-dock-slot:not([data-dwe-float-dragging]):has(.dwe-float-dock-button:is(:hover, :focus-visible)) { z-index: 1; }
+.dwe-preview-float-dock:not([data-dwe-shortcut-hover-handoff]) > .dwe-float-dock-slot:not([data-dwe-float-dragging], [data-dwe-shortcut-row-ghost]):hover,
+.dwe-float-dock-slot:not([data-dwe-float-dragging]):is([data-dwe-shortcut-keyboard-focus], [data-dwe-shortcut-motion-hover]) {
+  --dwe-float-label-scale: var(--dwe-float-slot-hover-scale);
+  --dwe-float-label-actions-size: var(--dwe-float-label-close-width);
+  --dwe-float-label-close-visibility: visible;
+  z-index: 1;
+}
+.dwe-float-dock-slot[data-dwe-shortcut-row-ghost] { pointer-events: none; z-index: 2; }
+.dwe-float-dock-close-hit { position: fixed; z-index: 3; cursor: pointer; -webkit-app-region: no-drag; }
 .dwe-float-dock-file-icon {
   position: absolute; inset-block: 0; right: 0; width: calc(var(--dwe-tool-size) - 2px);
   display: grid; place-items: center; pointer-events: none;
 }
 .dwe-float-dock-label {
+  --dwe-float-label-available: calc(var(--dwe-shortcut-available-width, 100vw - 16px) - var(--dwe-tool-size) - var(--dwe-float-label-gap));
   position: absolute; right: calc(100% + var(--dwe-float-label-gap)); top: 0;
   box-sizing: border-box; width: max-content; height: var(--dwe-tool-size);
-  max-width: max(0px, calc(var(--dwe-shortcut-available-width, 100vw - 16px) - var(--dwe-tool-size) - var(--dwe-float-label-gap)));
-  display: flex; align-items: center; gap: 6px; padding-inline: 8px; overflow: hidden;
+  display: flex; align-items: center;
   border: 1px solid var(--dwe-file-shortcut-border); border-radius: var(--dwe-ui-radius);
-  background: var(--dwe-file-shortcut-background); box-shadow: var(--dwe-floating-tool-shadow);
+  background: var(--dwe-float-shortcut-surface); box-shadow: var(--dwe-floating-tool-shadow);
   font: var(--dsh-content-font-size-secondary, 13px)/calc(var(--dwe-tool-size) - 2px) system-ui, sans-serif;
-  color: var(--dwe-preview-tool-color); opacity: 0; transform: translateX(4px); pointer-events: none;
+  color: var(--dwe-preview-tool-color); opacity: 0; visibility: hidden; pointer-events: none;
+  transform: translateX(4px); scale: var(--dwe-float-label-scale, 1); transform-origin: right center;
+}
+.dwe-float-dock-label::after {
+  content: ''; position: absolute; top: 0; bottom: 0; left: 100%;
+  width: calc(var(--dwe-float-label-gap) + 2px);
 }
 .dwe-sidebar-header-controls[data-dwe-shortcuts-fullscreen] .dwe-float-dock-label {
+  --dwe-float-label-available: calc(100vw - var(--dwe-shortcut-panel-left, 0px) - var(--dwe-fullscreen-rail));
   right: auto; left: calc(100% + var(--dwe-float-label-gap));
-  max-width: calc(100vw - var(--dwe-shortcut-panel-left, 0px) - var(--dwe-fullscreen-rail));
-  transform: translateX(-4px);
+  transform: translateX(-4px); transform-origin: left center;
 }
+.dwe-sidebar-header-controls[data-dwe-shortcuts-fullscreen] .dwe-float-dock-label::after { left: auto; right: 100%; }
+.dwe-float-dock-label-content {
+  display: flex; align-items: center; gap: 6px; padding-inline: 8px; overflow: hidden; min-width: 0;
+  box-sizing: border-box;
+  max-width: max(0px, calc(var(--dwe-float-label-available) / var(--dwe-float-slot-hover-scale) - var(--dwe-float-label-close-width) - 2px));
+}
+.dwe-float-dock-label-content > svg { flex: none; }
 .dwe-float-dock-label-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.dwe-float-dock-slot:not([data-dwe-float-dragging]) > .dwe-float-dock-button:is(:hover, :focus-visible) + .dwe-float-dock-label {
-  opacity: 1; transform: translateX(0);
+.dwe-float-dock-label-actions {
+  flex: none; inline-size: var(--dwe-float-label-actions-size, 0px); overflow: hidden;
+  visibility: var(--dwe-float-label-interactive, hidden);
+}
+.dwe-float-dock-label-close {
+  --dwe-icon-ink: currentColor;
+  display: grid; place-items: center; width: calc(var(--dwe-float-label-close-width) - 4px); height: 22px;
+  padding: 0; margin-inline-end: 4px; border: 0; border-radius: 5px; background: none;
+  color: inherit; cursor: pointer; -webkit-app-region: no-drag;
+}
+.dwe-float-dock-label-close:is(:hover, :active) { background: var(--dwe-tool-hover); }
+.dwe-float-dock-label-close > svg { pointer-events: none; }
+.dwe-preview-float-dock:is([data-dwe-shortcut-labels-open], :has(> [data-dwe-shortcut-keyboard-focus])):not(:has(> [data-dwe-float-dragging]))
+  > .dwe-float-dock-slot > .dwe-float-dock-button:not([data-dwe-shortcut-flight-target]) + .dwe-float-dock-label {
+  --dwe-float-label-interactive: var(--dwe-float-label-close-visibility, hidden);
+  opacity: 1; visibility: visible; pointer-events: auto; transform: translateX(0); transition-delay: 0s;
 }
 .dwe-float-dock-outline {
   position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none;
@@ -530,8 +578,8 @@ html[data-windows-titlebar]:not([data-fullscreen]) :is([data-dwe-file-preview-fl
 .dwe-float-dock-slot[data-dwe-float-collapsing] > .dwe-float-dock-button {
   --dwe-file-shortcut-current-marker: var(--dwe-file-shortcut-background);
   --dwe-file-shortcut-stroke: 2px;
-  background-color: var(--dwe-file-shortcut-active);
 }
+.dwe-float-dock-button { transform: scale(var(--dwe-float-label-scale, 1)); }
 .dwe-float-dock-add:is(:hover, :focus-visible, :active) {
   --dwe-tool-state-background: var(--dwe-tool-hover);
 }
@@ -543,9 +591,13 @@ html[data-windows-titlebar]:not([data-fullscreen]) :is([data-dwe-file-preview-fl
 .dwe-float-dock-slot[data-dwe-float-insert="before"]::after { top: -2px; }
 .dwe-float-dock-slot[data-dwe-float-insert="after"]::after { bottom: -2px; }
 @media (prefers-reduced-motion: no-preference) {
-  .dwe-float-dock-button { transition: background-color 100ms ease-out; }
+  .dwe-float-dock-button { transition: background-color 100ms ease-out, transform 160ms ease-out; }
   .dwe-float-dock-outline { transition: color 100ms ease-out, stroke-width 100ms ease-out; }
-  .dwe-float-dock-label { transition: opacity 110ms ease-out, transform 150ms ease-out; }
+  .dwe-float-dock-label {
+    transition: transform 360ms cubic-bezier(.25, .7, .35, 1), scale 160ms ease-out, background-color 100ms ease-out,
+      opacity 280ms ease-out, visibility 0s 280ms;
+  }
+  .dwe-float-dock-label-actions { transition: inline-size 180ms ease-in-out; }
   .dwe-float-dock-add { transition: opacity 150ms ease-out; }
 }
 .dwe-preferences {
@@ -963,9 +1015,6 @@ body[data-ds-dark-theme] .dwe-preferences select { color-scheme: dark; }
 :is(.dwe-preview-float-controls > button, [data-dwe-file-preview-float] [data-dockkit-float-grip] > button[data-dockkit-float-close]):is(:hover, :active):not(:disabled) {
   background: var(--dwe-preview-header-hover, var(--dwe-tool-hover));
 }
-.dwe-preview-float-controls > button[data-dwe-float-action="preview-add-shortcut"]:disabled {
-  color: #ADB2B8; opacity: 1; cursor: default;
-}
 :is(.dwe-preview-float-controls > button, [data-dwe-file-preview-float] [data-dockkit-float-grip] > button[data-dockkit-float-close]):focus-visible {
   outline: 2px solid var(--dwe-accent); outline-offset: -2px;
 }
@@ -1065,7 +1114,7 @@ html[data-dwe-preview-dragging] iframe { pointer-events: none !important; }
 .dwe-preview-placeholder { position: absolute; inset: 0; }
 .dwe-preview-loading-cover {
   position: absolute; inset: var(--dwe-preview-top-inset, 0px) 0 0; z-index: 2;
-  display: grid; place-items: center; background: #fff;
+  display: grid; place-items: center; background: var(--dwe-preview-loading-surface);
 }
 .dwe-preview-loading-cover[data-ready] { opacity: 0; visibility: hidden; pointer-events: none; }
 @media (prefers-reduced-motion: no-preference) {
